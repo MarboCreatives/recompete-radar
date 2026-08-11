@@ -121,7 +121,23 @@ def main() -> int:
         check("sitemap host is not a placeholder", not placeholder,
               f"found {sorted(placeholder)} — SITE_URL was never configured"
               if placeholder else "")
-        sm_urls = [re.sub(r"^https?://[^/]+/", "", u) for u in raw]
+        # GitHub Pages PROJECT sites are served from a subpath
+        # (https://user.github.io/repo/...), so stripping scheme+host alone
+        # leaves "repo/page.html", which matches no file. Infer how many leading
+        # path segments belong to the base URL by choosing the depth at which
+        # the most URLs actually resolve. If nothing resolves at any depth, the
+        # sitemap is genuinely broken and the check below still fails.
+        stripped = [re.sub(r"^https?://[^/]+/", "", u) for u in raw]
+        best_depth, best_hits = 0, -1
+        for depth in range(0, 3):
+            cand = ["/".join(u.split("/")[depth:]) for u in stripped]
+            hits = sum(1 for u in cand if os.path.exists(os.path.join(site, u)))
+            if hits > best_hits:
+                best_depth, best_hits = depth, hits
+        if best_depth:
+            print(f"  (sitemap served from a {best_depth}-segment base path: "
+                  f"{'/'.join(stripped[0].split('/')[:best_depth])}/)")
+        sm_urls = ["/".join(u.split("/")[best_depth:]) for u in stripped]
     missing = [u for u in sm_urls if not os.path.exists(os.path.join(site, u))]
     dupes = len(sm_urls) - len(set(sm_urls))
     check("every sitemap URL resolves to a file", not missing,

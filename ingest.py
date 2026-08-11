@@ -419,38 +419,44 @@ def iter_all_rows(max_rows: Optional[int] = None, throttle: float = 0.3) -> Iter
 # Output
 # --------------------------------------------------------------------------
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS contracts (
-    contract_key TEXT PRIMARY KEY,
-    procurement_id TEXT, reference_number TEXT,
-    vendor_name TEXT, vendor_postal_code TEXT, country_of_vendor TEXT,
-    buyer_org TEXT, buyer_org_code TEXT, buyer_name TEXT,
-    description_en TEXT, description_fr TEXT,
-    commodity_code TEXT, commodity_type TEXT, economic_object_code TEXT,
-    contract_value REAL, original_value REAL, amendment_value REAL,
-    contract_date TEXT, contract_period_start TEXT, delivery_date TEXT,
-    days_to_expiry INTEGER, expiry_bucket TEXT, duration_days INTEGER,
-    number_of_bids INTEGER, competition_density TEXT,
-    solicitation_procedure TEXT, limited_tendering_reason TEXT, is_sole_sourced INTEGER,
-    standing_offer_number TEXT, instrument_type TEXT, reporting_period TEXT,
-    source_row_id INTEGER, amendment_count INTEGER
-);
+# Indexes only. The CREATE TABLE is generated from the dataclass at runtime —
+# hand-writing the column list is how vendor_key and category_name silently
+# desynced and broke a 13-minute production run at the very last step.
+INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_expiry  ON contracts(days_to_expiry);
 CREATE INDEX IF NOT EXISTS idx_org     ON contracts(buyer_org);
-CREATE INDEX IF NOT EXISTS idx_vendor  ON contracts(vendor_name);
+CREATE INDEX IF NOT EXISTS idx_vendor  ON contracts(vendor_key);
 CREATE INDEX IF NOT EXISTS idx_commod  ON contracts(commodity_code);
 CREATE INDEX IF NOT EXISTS idx_bucket  ON contracts(expiry_bucket);
 """
 
 
+def sqlite_schema() -> str:
+    """CREATE TABLE built from the dataclass, so columns and fields cannot diverge."""
+    from dataclasses import fields as _fields
+    types = {float: "REAL", int: "INTEGER", bool: "INTEGER"}
+    cols = []
+    for f in _fields(Contract):
+        base = getattr(f.type, "__args__", [f.type])[0] if hasattr(f.type, "__args__") else f.type
+        cols.append(f"{f.name} {types.get(base, 'TEXT')}")
+    cols[0] = cols[0].split()[0] + " TEXT PRIMARY KEY"
+    return "CREATE TABLE IF NOT EXISTS contracts (\n    " + ",\n    ".join(cols) + "\n);"
+
+
 def write_sqlite(contracts: list[Contract], path: str) -> None:
+    from dataclasses import fields as _fields
     conn = sqlite3.connect(path)
-    conn.executescript(SCHEMA)
+    conn.executescript(sqlite_schema())
+    conn.executescript(INDEXES)
+    n_cols = len(_fields(Contract))
     rows = []
     for c in contracts:
         d = asdict(c)
         d["is_sole_sourced"] = None if d["is_sole_sourced"] is None else int(d["is_sole_sourced"])
         rows.append(tuple(d.values()))
+    if rows and len(rows[0]) != n_cols:
+        raise RuntimeError(f"column drift: table has {n_cols} columns, "
+                           f"row has {len(rows[0])} values")
     placeholders = ",".join("?" * len(rows[0])) if rows else ""
     if rows:
         conn.executemany(f"INSERT OR REPLACE INTO contracts VALUES ({placeholders})", rows)
@@ -520,6 +526,36 @@ def self_test(fixture_path: str) -> int:
     failures += 0 if ok else 1
     print(f"[{'PASS' if ok else 'FAIL'}] competition density derived: "
           f"{graded}/{len(with_bids)} records with bid counts")
+
+    # 7. SQLite write must actually work. This was NOT covered before, which is
+    #    how a 33-column table met a 35-field dataclass and killed a 13-minute
+    #    production run at the final step.
+    import tempfile
+    from dataclasses import fields as _f
+    tmp = os.path.join(tempfile.mkdtemp(), "selftest.db")
+    try:
+        derive_category_names(deduped)
+        write_sqlite(deduped, tmp)
+        conn = sqlite3.connect(tmp)
+        n_rows = conn.execute("SELECT COUNT(*) FROM contracts").fetchone()[0]
+        n_cols = len(conn.execute("PRAGMA table_info(contracts)").fetchall())
+        conn.close()
+        ok = n_rows == len(deduped) and n_cols == len(_f(Contract))
+        failures += 0 if ok else 1
+        print(f"[{'PASS' if ok else 'FAIL'}] sqlite write: {n_rows} rows, "
+              f"{n_cols} cols == {len(_f(Contract))} dataclass fields")
+    except Exception as exc:
+        failures += 1
+        print(f"[FAIL] sqlite write raised: {exc}")
+
+    # 8. Both derived fields must be populated, or the site loses vendor
+    #    consolidation and readable category names silently.
+    vk = sum(1 for c in deduped if c.vendor_key)
+    cn = sum(1 for c in deduped if c.category_name)
+    ok = vk == len(deduped) and cn > 0
+    failures += 0 if ok else 1
+    print(f"[{'PASS' if ok else 'FAIL'}] derived fields: vendor_key {vk}/{len(deduped)}, "
+          f"category_name {cn}/{len(deduped)}")
 
     # ---- descriptive output ----
     print("\n" + "-" * 68)
@@ -623,11 +659,11 @@ def main() -> int:
     )
     print(f"recompete pipeline -> {len(live):,} contracts")
 
-    write_sqlite(deduped, args.out)
-    print(f"wrote {args.out}")
+
 
     # The site generator consumes this file. Writing it is the default, not an
     # option, so the ingest and the build cannot silently drift apart again.
+    # JSON first: it is what build_site.py consumes. SQLite is a convenience.
     with open(args.pipeline_out, "w", encoding="utf-8") as fh:
         json.dump([asdict(c) for c in live], fh)
     print(f"wrote {args.pipeline_out}  ({os.path.getsize(args.pipeline_out)/1e6:.1f} MB)")
@@ -637,6 +673,9 @@ def main() -> int:
     if missing:
         print(f"WARNING: fields not populated: {missing}", file=sys.stderr)
         return 1
+
+    write_sqlite(deduped, args.out)
+    print(f"wrote {args.out}")
 
     return 0
 
