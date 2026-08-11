@@ -57,12 +57,21 @@ jobs:
       - name: Download and process contract data
         run: python3 ingest.py --full --pipeline-out recompete_pipeline.json
 
+      # The signup form only renders if ALL of --signup-action, --business-name
+      # and --mailing-address are supplied. That is deliberate: a form posting
+      # nowhere loses signups silently, and a consent request without the sender
+      # identification and mailing address is itself a CASL violation. Missing
+      # any of them fails the build rather than publishing something broken.
+      # These values are public by design — they appear on every page.
       - name: Build the site
         run: |
           python3 build_site.py \
             --input recompete_pipeline.json \
             --out site \
-            --base-url "${{ vars.SITE_URL }}"
+            --base-url "${{ vars.SITE_URL }}" \
+            --signup-action "https://app.kit.com/forms/9791323/subscriptions" \
+            --business-name "Canadian Recompete Radar" \
+            --mailing-address "916 Pembroke St. W, Pembroke, Ontario K8A 5P8"
 
       # THE SAFETY GATE. audit.py exits non-zero on any failure, which fails the
       # job, which means nothing deploys. A bad refresh cannot reach the public
