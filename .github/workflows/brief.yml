@@ -1,0 +1,70 @@
+name: Weekly recompete brief
+
+# Produces the week's email as a downloadable artifact every Monday morning.
+# It does NOT send anything — at this list size you paste it into Kit yourself
+# and press send. That is deliberate: automated sending to a tiny list is a
+# deliverability risk, and you want eyes on the first few editions anyway.
+#
+# This job re-downloads the source data rather than reusing the site build's
+# artifact. That costs ~13 minutes but means the brief never depends on another
+# workflow having run, and can never be built from an expired artifact.
+on:
+  schedule:
+    - cron: "0 11 * * 1"      # Mondays 11:00 UTC (07:00 EDT / 06:00 EST)
+  workflow_dispatch:
+
+# Separate concurrency group from the site build: these two jobs are unrelated
+# and must never cancel or queue behind each other.
+concurrency:
+  group: brief
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  brief:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Transform + privacy checks run before any network call, so a logic
+      # regression costs seconds rather than a 13-minute download.
+      - name: Verify brief logic
+        run: python3 brief.py --self-test
+
+      - name: Verify ingest logic
+        run: python3 ingest.py --self-test
+
+      - name: Download contract data
+        run: python3 ingest.py --full --pipeline-out recompete_pipeline.json
+
+      # No --as-of: defaults to today, which is what makes the 7-day crossing
+      # window land correctly without any stored state.
+      - name: Build this week's brief
+        run: |
+          python3 brief.py \
+            --input recompete_pipeline.json \
+            --html-out brief.html \
+            --text-out brief.txt \
+            --site "${{ vars.SITE_URL }}"
+
+      - name: Show the summary in the run log
+        run: |
+          echo "----- plain text brief -----"
+          cat brief.txt
+
+      - name: Upload the brief
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-brief
+          path: |
+            brief.html
+            brief.txt
+          retention-days: 30
