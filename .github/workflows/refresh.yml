@@ -1,0 +1,93 @@
+name: Refresh data and publish site
+
+# Three ways this runs:
+#   1. On a schedule — the source dataset is published quarterly, so monthly
+#      polling picks up new data within weeks of it landing without being wasteful.
+#   2. Manually — the "Run workflow" button, for when you want it now.
+#   3. On push to main — so a code change rebuilds and redeploys.
+on:
+  schedule:
+    - cron: "0 6 5 * *"       # 06:00 UTC on the 5th of each month
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md"]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never run two refreshes at once — they would fight over the Pages deployment.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90        # full ingest is ~20 min; generous headroom
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Fail loudly rather than publishing a placeholder domain. Without this,
+      # forgetting to set SITE_URL produces a sitemap full of example.com URLs
+      # that Search Console rejects — the site would look fine and never index.
+      # Runs FIRST so a misconfiguration costs seconds, not a 20-minute download.
+      - name: Require SITE_URL to be configured
+        run: |
+          if [ -z "${{ vars.SITE_URL }}" ]; then
+            echo "::error::SITE_URL repository variable is not set."
+            echo "Set it under Settings > Secrets and variables > Actions > Variables."
+            echo "Value should be your published URL, e.g. https://user.github.io/repo"
+            exit 1
+          fi
+          echo "Building for ${{ vars.SITE_URL }}"
+
+      # No pip install step: everything is Python standard library, on purpose.
+      # Zero dependencies means nothing can break from an upstream package change.
+      - name: Verify transform logic before touching the network
+        run: python3 ingest.py --self-test
+
+      - name: Download and process contract data
+        run: python3 ingest.py --full --pipeline-out recompete_pipeline.json
+
+      - name: Build the site
+        run: |
+          python3 build_site.py \
+            --input recompete_pipeline.json \
+            --out site \
+            --base-url "${{ vars.SITE_URL }}"
+
+      # THE SAFETY GATE. audit.py exits non-zero on any failure, which fails the
+      # job, which means nothing deploys. A bad refresh cannot reach the public
+      # site — it stops here and you get an email.
+      - name: Audit the built site against the source data
+        run: python3 audit.py --input recompete_pipeline.json --site site
+
+      - name: Keep the dataset as a downloadable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: recompete-pipeline-json
+          path: recompete_pipeline.json
+          retention-days: 90
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build              # only runs if build AND audit succeeded
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
