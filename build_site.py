@@ -37,7 +37,9 @@ import html
 import json
 import os
 import re
+import sys
 import unicodedata
+import urllib.parse
 from collections import Counter, defaultdict
 from datetime import date
 from typing import Any, Iterable, Optional
@@ -49,6 +51,58 @@ TAG = ("Federal contracts coming up for renewal — who holds them, "
 # Thin-content thresholds. A page is generated only if the group clears one.
 MIN_CONTRACTS = 3
 MIN_VALUE = 5_000_000
+
+# --- Email capture -----------------------------------------------------------
+# GitHub Pages is static and cannot process a form POST, so the form must submit
+# to a third-party endpoint (Buttondown, MailerLite, Kit, Formspree...). Set it
+# with --signup-action. If it is NOT set, no form is rendered at all: a form that
+# posts nowhere silently swallows signups, which is worse than having none.
+SIGNUP_ACTION = ""
+SIGNUP_CATEGORIES: list[str] = []   # populated from the data in build()
+
+# CASL identification. The Electronic Commerce Protection Regulations require a
+# REQUEST for consent — not just the emails that follow — to set out the name of
+# the business seeking consent, a mailing address, a contact method, and a
+# statement that consent can be withdrawn. A signup box without these is itself
+# the violation, so the build refuses to render one. Kept as parameters so the
+# address can be swapped (e.g. home -> PO box) with a flag, not a code edit.
+SIGNUP_BUSINESS = ""
+SIGNUP_ADDRESS = ""
+SIGNUP_CONTACT = ""
+
+
+def signup_block() -> str:
+    """One email box, on every page. Feeds both revenue models:
+    the address builds the newsletter list; the optional category field is what
+    turns a subscriber into a routable referral lead. Consent is explicit and the
+    referral intent is disclosed up front — PIPEDA applies, and burying it would
+    poison the only asset this product has, which is being trustworthy."""
+    if not SIGNUP_ACTION:
+        return ""
+    opts = "".join(f'<option value="{esc(c)}">{esc(c[:60])}</option>'
+                   for c in SIGNUP_CATEGORIES)
+    return f"""
+<section class="sub" id="brief">
+  <h2>Weekly recompete brief</h2>
+  <p class="sb">Around <strong>63 federal contracts</strong> cross into the
+  12&#8209;month planning window every week — roughly $19B of contract value a year.
+  Get the week's list by email, free.</p>
+  <form class="subf" action="{esc(SIGNUP_ACTION)}" method="post" target="_blank">
+    <input type="email" name="email_address" required placeholder="you@company.ca"
+           aria-label="Email address">
+    <select name="fields[category]" aria-label="Category you bid in">
+      <option value="">What do you bid on? (optional)</option>
+      {opts}
+    </select>
+    <button type="submit">Get the brief</button>
+  </form>
+  <p class="fine">Free, weekly. <strong>You can withdraw your consent and
+  unsubscribe at any time</strong>, using the link in every email. We may
+  occasionally introduce you to bid consultants or proposal specialists relevant
+  to your category — only if you ask, never by passing your details on without
+  you saying yes first.</p>
+  <p class="fine" id="casl">Sent by {esc(SIGNUP_BUSINESS)}, {esc(SIGNUP_ADDRESS)} &middot; <a href="{esc(SIGNUP_CONTACT)}">{esc(SIGNUP_CONTACT)}</a></p>
+</section>"""
 
 CSS = """
 :root{--bg:#0f1115;--pn:#171a21;--ln:#252a34;--tx:#e6e9ef;--dm:#98a1b3;
@@ -87,6 +141,16 @@ border-bottom:1px solid var(--ln);font-size:13.5px}
 .cols3{column-count:3;column-gap:26px}
 @media(max-width:900px){.cols3{column-count:1}}
 .cols3 li{display:block;padding:4px 0;border:0;break-inside:avoid}
+.sub{margin:38px 0 0;padding:20px;background:var(--pn);border:1px solid #2f6ea8;border-radius:10px}
+.sub h2{margin:0 0 6px;font-size:17px}
+.subf{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 10px}
+.subf input,.subf select{flex:1 1 200px;min-width:0;padding:9px 11px;border-radius:7px;
+border:1px solid var(--ln);background:var(--bg);color:var(--tx);font-size:14px}
+.subf button{padding:9px 18px;border-radius:7px;border:0;background:var(--ac);
+color:#06121f;font-weight:600;font-size:14px;cursor:pointer;white-space:nowrap}
+.subf button:hover{filter:brightness(1.08)}
+.fine{color:var(--dm);font-size:11.5px;margin:0;line-height:1.55}
+@media(max-width:560px){.subf input,.subf select,.subf button{flex:1 1 100%}}
 .tw{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 -4px;padding:0 4px}
 .tw table{min-width:560px}
 @media(max-width:560px){
@@ -151,6 +215,7 @@ def page(title: str, desc: str, body: str, depth: int = 0) -> str:
 <header><h1><a href="{root}index.html" style="color:inherit">{SITE}</a></h1>
 <p class="sb">{esc(TAG)}</p></header>
 {body}
+{signup_block()}
 <footer>Built from the Government of Canada <strong>Proactive Publication of Contracts</strong>
 dataset (contracts over $10,000), Treasury Board of Canada Secretariat.
 Open Government Licence – Canada.<br>
@@ -261,6 +326,12 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
     total_value = sum(r.get("contract_value") or 0 for r in live)
 
     add_category_key(live)
+
+    # Dropdown options come from the data, so they match what people actually
+    # bid on rather than a guessed list.
+    global SIGNUP_CATEGORIES
+    _cc = Counter(r.get("category_name") for r in live if r.get("category_name"))
+    SIGNUP_CATEGORIES = [c for c, _ in _cc.most_common(14)]
 
     depts = group(live, "buyer_org")
     vendors = group(live, "vendor_key", "vendor_name")
@@ -489,9 +560,62 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", required=True)
     ap.add_argument("--out", default="site")
+    ap.add_argument("--signup-action", default="",
+                    help="Kit form POST endpoint for email capture, e.g.\n"
+                         "https://app.kit.com/forms/1234567/subscriptions\n"
+                         "Omitted = no form rendered, because a form posting nowhere\n"
+                         "silently loses signups.")
+    ap.add_argument("--business-name", default="",
+                    help="CASL: the name you carry on business under. Required\n"
+                         "whenever --signup-action is set.")
+    ap.add_argument("--mailing-address", default="",
+                    help="CASL: a current mailing address, valid 60+ days.\n"
+                         "Required whenever --signup-action is set.")
+    ap.add_argument("--contact-url", default="",
+                    help="CASL: a contact web address. Defaults to --base-url.")
     ap.add_argument("--base-url", default="",
                     help="full site URL, e.g. https://example.com — required for a\n                          valid sitemap; relative paths are rejected by Search Console")
     args = ap.parse_args()
+
+    global SIGNUP_ACTION
+    # The form's field names (email_address, fields[category]) are Kit's schema.
+    # Kit accepts a POST with unrecognised keys and returns success while storing
+    # nothing — so pointing this at a non-Kit endpoint would produce a form that
+    # looks like it works and quietly discards every signup. Refuse instead.
+    if args.signup_action:
+        u = urllib.parse.urlparse(args.signup_action)
+        ok_host = u.netloc in ("app.kit.com", "app.convertkit.com")
+        ok_path = re.fullmatch(r"/forms/\d+/subscriptions/?", u.path or "")
+        if u.scheme != "https" or not ok_host or not ok_path:
+            print(f"ERROR: --signup-action is not a Kit form endpoint:\n"
+                  f"  got      {args.signup_action}\n"
+                  f"  expected https://app.kit.com/forms/<numeric id>/subscriptions\n"
+                  f"The form posts Kit-specific field names. Another provider would\n"
+                  f"accept the request and silently drop the data.", file=sys.stderr)
+            return 2
+
+    # CASL: a consent request missing the identification block is itself the
+    # violation. Refuse to render one rather than publish it on 2,000+ pages.
+    global SIGNUP_BUSINESS, SIGNUP_ADDRESS, SIGNUP_CONTACT
+    if args.signup_action:
+        missing = [n for n, v in (("--business-name", args.business_name),
+                                  ("--mailing-address", args.mailing_address))
+                   if not v.strip()]
+        if missing:
+            print(f"ERROR: --signup-action is set but {' and '.join(missing)} "
+                  f"{'is' if len(missing)==1 else 'are'} missing.\n"
+                  f"CASL requires a request for consent to identify the sender "
+                  f"and give a mailing address.\nRefusing to publish a signup "
+                  f"form without them.", file=sys.stderr)
+            return 3
+        SIGNUP_BUSINESS = args.business_name.strip()
+        SIGNUP_ADDRESS = args.mailing_address.strip()
+        SIGNUP_CONTACT = (args.contact_url or args.base_url).strip()
+        if not SIGNUP_CONTACT:
+            print("ERROR: --contact-url or --base-url required for the CASL "
+                  "contact method.", file=sys.stderr)
+            return 3
+    SIGNUP_ACTION = args.signup_action
 
     rows = json.load(open(args.input, encoding="utf-8"))
     print(f"loaded {len(rows):,} contracts from {args.input}")
