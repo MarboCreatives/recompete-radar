@@ -77,6 +77,29 @@ SIGNUP_CROSSING_N = 0
 # <head> when set. See page() for why this is generated rather than a file.
 GOOGLE_VERIFICATION = ""
 
+# folder -> group key -> the filename actually written for that group.
+# Populated in build() BEFORE any page is rendered, because a department page
+# links to incumbent pages and vice versa; if this were filled in as pages were
+# written, whichever folder was written first would link to nothing.
+# Links are built from this map, never by re-deriving the slug from a display
+# name — collision-renamed pages would be silently orphaned.
+FILENAMES: dict[str, dict[str, str]] = {"department": {}, "incumbent": {}, "category": {}}
+
+
+def entity_link(folder: str, key: Optional[str], text: str, depth: int) -> str:
+    """Link to an entity page, or plain text when no page exists.
+
+    Groups below the thin-content threshold get no page of their own (they are
+    listed on the folder index instead), so a link is only emitted when the
+    filename map actually has an entry.
+    """
+    safe = esc(text)
+    fn = FILENAMES.get(folder, {}).get(key or "")
+    if not fn:
+        return safe
+    prefix = "../" * depth
+    return f'<a href="{prefix}{folder}/{fn}">{safe}</a>'
+
 
 def signup_pitch() -> str:
     """The volume claim, phrased so it stays true at any data size.
@@ -154,6 +177,11 @@ td{padding:9px 8px;border-bottom:1px solid var(--ln)}
 tr:hover td{background:#141821}
 .n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .d{color:var(--dm);font-size:12.5px}
+/* Contract reference number: present for anyone who needs to quote it to a
+   department, visually subordinate so it doesn't compete with the vendor name. */
+.ref{color:var(--dm);font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;opacity:.75}
+td a{color:inherit;text-decoration:none;border-bottom:1px solid var(--ln)}
+td a:hover{color:var(--ac);border-bottom-color:var(--ac)}
 .p{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10.5px;font-weight:600}
 .hot{background:rgba(255,107,107,.17);color:var(--ht)}
 .warn{background:rgba(255,180,84,.17);color:var(--wn)}
@@ -260,7 +288,15 @@ Not affiliated with the Government of Canada.</footer>
 
 
 def contract_table(rows: list[dict], show: tuple[str, ...] = ("dept", "cat"),
-                   limit: int = 250) -> str:
+                   limit: int = 250, depth: int = 0) -> str:
+    """The main listing. Entity names link through to their own pages where one
+    exists — this is both the obvious navigation people expect and the bulk of
+    the site's internal linking, which is how search engines discover the ~2,100
+    detail pages in the first place.
+
+    `depth` is how many folders deep the containing page is, so relative links
+    resolve from both the root index and from pages inside folder/.
+    """
     head = "<tr><th>Expires</th><th class='n'>Value</th><th>Incumbent</th>"
     if "dept" in show:
         head += "<th>Department</th>"
@@ -272,15 +308,23 @@ def contract_table(rows: list[dict], show: tuple[str, ...] = ("dept", "cat"),
     for c in rows[:limit]:
         days = c.get("days_to_expiry")
         bids = c.get("number_of_bids")
+        # The published reference number is what lets someone quote the exact
+        # contract when they contact the department. Kept as a subordinate line
+        # inside the incumbent cell rather than its own column: an 8th column
+        # reintroduces the mobile overflow the .tw wrapper exists to prevent.
+        ref = c.get("reference_number")
+        ref_html = f'<br><span class="ref">{esc(str(ref)[:34])}</span>' if ref else ""
         cells = [
             f'<td>{bucket_pill(c.get("expiry_bucket"))} <span class="d">{days}d</span></td>',
             f'<td class="n">{money(c.get("contract_value"))}</td>',
-            f'<td>{esc((c.get("vendor_name") or "—")[:38])}</td>',
+            f'<td>{entity_link("incumbent", c.get("vendor_key"), (c.get("vendor_name") or "—")[:38], depth)}{ref_html}</td>',
         ]
         if "dept" in show:
-            cells.append(f'<td class="d">{esc((c.get("buyer_org") or "").split(" | ")[0][:38])}</td>')
+            dept_txt = (c.get("buyer_org") or "").split(" | ")[0][:38]
+            cells.append(f'<td class="d">{entity_link("department", c.get("buyer_org"), dept_txt, depth)}</td>')
         if "cat" in show:
-            cells.append(f'<td class="d">{esc((c.get("category_name") or c.get("commodity_code") or "")[:38])}</td>')
+            cat_txt = (c.get("category_name") or c.get("commodity_code") or "")[:38]
+            cells.append(f'<td class="d">{entity_link("category", c.get("category_key"), cat_txt, depth)}</td>')
         cells.append(f'<td class="n d">{bids if bids is not None else "—"}</td>')
         cells.append(f'<td>{density_pill(c.get("competition_density"))}</td>')
         out.append("<tr>" + "".join(cells) + "</tr>")
@@ -391,17 +435,24 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
 
     # key -> actual filename written. Links MUST be built from this, never
     # recomputed from the display name, or collision-renamed pages get orphaned.
-    filenames: dict[str, dict[str, str]] = {"department": {}, "incumbent": {}, "category": {}}
+    global FILENAMES
+    FILENAMES = {"department": {}, "incumbent": {}, "category": {}}
+    filenames = FILENAMES
 
-    def write_group_pages(groups: dict[str, dict], folder: str, label: str,
-                          show: tuple[str, ...]) -> list[tuple[str, dict]]:
+    def assign_filenames(groups: dict[str, dict], folder: str) -> list[tuple[str, dict]]:
+        """Decide every page's filename BEFORE anything is rendered.
+
+        Pages cross-link (a department page lists incumbents and vice versa), so
+        the complete map has to exist before the first page is written —
+        otherwise whichever folder rendered first would emit plain text where a
+        link belonged.
+        """
         listed = []
         used: set[str] = set()          # filenames already taken in this folder
         for key, g in groups.items():
             if not substantial(g):
                 listed.append((key, g))
                 continue
-
             # Slug collisions must be resolved against names already issued in
             # this run, not against os.path.exists — two groups can produce the
             # same slug AND the same fallback slug, silently overwriting each
@@ -417,6 +468,14 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
                     n += 1
             used.add(fn)
             filenames[folder][key] = fn
+        return listed
+
+    def write_group_pages(groups: dict[str, dict], folder: str, label: str,
+                          show: tuple[str, ...]) -> None:
+        for key, g in groups.items():
+            fn = filenames[folder].get(key)
+            if not fn:                   # below the thin-content threshold
+                continue
             path = os.path.join(outdir, folder, fn)
 
             soon = sum(1 for i in g["items"] if (i.get("days_to_expiry") or 999) <= 365)
@@ -444,15 +503,20 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
                    'so a corporate group\'s total exposure may be higher.</p>'
                    if folder == "incumbent" else "")
                 + "<h2>Contracts by expiry</h2>"
-                + contract_table(g["items"], show=show, limit=400))
+                + contract_table(g["items"], show=show, limit=400, depth=1))
             open(path, "w", encoding="utf-8").write(page(title, desc, body, 1))
             urls.append(f"{folder}/{fn}")
             written[folder] += 1
-        return listed
 
-    small_d = write_group_pages(depts, "department", "Department", ("cat",))
-    small_v = write_group_pages(vendors, "incumbent", "Incumbent", ("dept", "cat"))
-    small_c = write_group_pages(cats, "category", "Category", ("dept",))
+    # PASS 1 — every filename decided before a single page is rendered.
+    small_d = assign_filenames(depts, "department")
+    small_v = assign_filenames(vendors, "incumbent")
+    small_c = assign_filenames(cats, "category")
+
+    # PASS 2 — render, now that cross-folder links can all be resolved.
+    write_group_pages(depts, "department", "Department", ("cat",))
+    write_group_pages(vendors, "incumbent", "Incumbent", ("dept", "cat"))
+    write_group_pages(cats, "category", "Category", ("dept",))
 
     # ---- index pages (keeps small groups crawlable and internally linked)
     def write_index(groups: dict[str, dict], small: list, folder: str, label: str) -> None:
