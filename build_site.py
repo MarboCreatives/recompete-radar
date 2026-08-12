@@ -69,6 +69,34 @@ SIGNUP_CATEGORIES: list[str] = []   # populated from the data in build()
 SIGNUP_BUSINESS = ""
 SIGNUP_ADDRESS = ""
 SIGNUP_CONTACT = ""
+SIGNUP_PER_WEEK = 0        # derived in build(); see note there
+SIGNUP_YEAR_VALUE = 0.0
+SIGNUP_CROSSING_N = 0
+
+# Google Search Console site-verification token. Emitted into every page's
+# <head> when set. See page() for why this is generated rather than a file.
+GOOGLE_VERIFICATION = ""
+
+
+def signup_pitch() -> str:
+    """The volume claim, phrased so it stays true at any data size.
+
+    A weekly rate is the most compelling framing but becomes nonsense when the
+    flow is under one a week ("Around 0 contracts...cross every week"), so fall
+    back to the annual figure, and drop the claim entirely if nothing is
+    crossing. Real data currently gives ~63/week; these branches exist so a
+    future refresh cannot turn the pitch into a false or absurd statement.
+    """
+    if SIGNUP_CROSSING_N <= 0:
+        return "Federal contracts approaching renewal, summarised weekly by email, free."
+    if SIGNUP_PER_WEEK >= 1:
+        lead = (f"Around <strong>{SIGNUP_PER_WEEK} federal contracts</strong> cross into the "
+                f"12&#8209;month planning window every week")
+    else:
+        lead = (f"<strong>{SIGNUP_CROSSING_N:,} federal contracts</strong> cross into the "
+                f"12&#8209;month planning window over the coming year")
+    return (f"{lead} — {money(SIGNUP_YEAR_VALUE)} of contract value a year. "
+            f"Get the week's list by email, free.")
 
 
 def signup_block() -> str:
@@ -84,9 +112,7 @@ def signup_block() -> str:
     return f"""
 <section class="sub" id="brief">
   <h2>Weekly recompete brief</h2>
-  <p class="sb">Around <strong>63 federal contracts</strong> cross into the
-  12&#8209;month planning window every week — roughly $19B of contract value a year.
-  Get the week's list by email, free.</p>
+  <p class="sb">{signup_pitch()}</p>
   <form class="subf" action="{esc(SIGNUP_ACTION)}" method="post" target="_blank">
     <input type="email" name="email_address" required placeholder="you@company.ca"
            aria-label="Email address">
@@ -207,10 +233,16 @@ def density_pill(d: Optional[str]) -> str:
 
 def page(title: str, desc: str, body: str, depth: int = 0) -> str:
     root = "../" * depth
+    # Search Console verification is emitted by the generator, not dropped in as
+    # a static file. The site directory is rebuilt from scratch every refresh,
+    # so an uploaded google*.html would be deleted and Google would silently
+    # un-verify the property. A generated tag cannot be lost that way.
+    gv = (f'\n<meta name="google-site-verification" content="{esc(GOOGLE_VERIFICATION)}">'
+          if GOOGLE_VERIFICATION else "")
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{esc(title)}</title>
-<meta name="description" content="{esc(desc)}">
+<meta name="description" content="{esc(desc)}">{gv}
 <style>{CSS}</style></head><body><div class="w">
 <header><h1><a href="{root}index.html" style="color:inherit">{SITE}</a></h1>
 <p class="sb">{esc(TAG)}</p></header>
@@ -342,6 +374,17 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
         b = r.get("expiry_bucket")
         if b in counts:
             counts[b] += 1
+
+    # Figures quoted in the signup copy are DERIVED, never hardcoded. Contracts
+    # currently sitting in the 12-24mo bucket are exactly those that will cross
+    # the 12-month planning threshold over the coming year, so that bucket is
+    # both the annual flow and (÷52) the weekly rate. Hardcoding these would
+    # quietly become a false claim on 2,000+ pages at the next data refresh.
+    global SIGNUP_PER_WEEK, SIGNUP_YEAR_VALUE, SIGNUP_CROSSING_N
+    _crossing = [r for r in live if r.get("expiry_bucket") == "12-24mo"]
+    SIGNUP_CROSSING_N = len(_crossing)
+    SIGNUP_PER_WEEK = round(SIGNUP_CROSSING_N / 52)
+    SIGNUP_YEAR_VALUE = sum(r.get("contract_value") or 0 for r in _crossing)
 
     written = {"department": 0, "incumbent": 0, "category": 0}
     urls = ["index.html"]
@@ -573,6 +616,9 @@ def main() -> int:
                          "Required whenever --signup-action is set.")
     ap.add_argument("--contact-url", default="",
                     help="CASL: a contact web address. Defaults to --base-url.")
+    ap.add_argument("--google-verification", default="",
+                    help="Google Search Console token (the content=\"...\" value\n"
+                         "only, not the whole meta tag).")
     ap.add_argument("--base-url", default="",
                     help="full site URL, e.g. https://example.com — required for a\n                          valid sitemap; relative paths are rejected by Search Console")
     args = ap.parse_args()
@@ -616,6 +662,29 @@ def main() -> int:
                   "contact method.", file=sys.stderr)
             return 3
     SIGNUP_ACTION = args.signup_action
+
+    # Google's UI hands you a whole <meta ...> tag, so pasting the tag rather
+    # than the bare token is the obvious mistake. Nesting a tag inside an
+    # attribute would produce broken HTML and silent verification failure, so
+    # recover the token if we can and refuse if we cannot.
+    global GOOGLE_VERIFICATION
+    gv = (args.google_verification or "").strip()
+    if gv:
+        if "<" in gv or "meta" in gv.lower():
+            m = re.search(r'content=["\']([^"\']+)["\']', gv)
+            if not m:
+                print("ERROR: --google-verification looks like a meta tag but no "
+                      "content=\"...\" value could be read from it.\n"
+                      "Pass only the token, e.g. --google-verification abc123",
+                      file=sys.stderr)
+                return 4
+            gv = m.group(1).strip()
+            print(f"note: extracted verification token from the pasted meta tag")
+        if not re.fullmatch(r"[A-Za-z0-9_\-]{20,100}", gv):
+            print(f"ERROR: --google-verification does not look like a Google token: {gv!r}",
+                  file=sys.stderr)
+            return 4
+        GOOGLE_VERIFICATION = gv
 
     rows = json.load(open(args.input, encoding="utf-8"))
     print(f"loaded {len(rows):,} contracts from {args.input}")
