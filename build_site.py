@@ -195,7 +195,11 @@ border-bottom:1px solid var(--ln);font-size:13.5px}
 .cols3{column-count:3;column-gap:26px}
 @media(max-width:900px){.cols3{column-count:1}}
 .cols3 li{display:block;padding:4px 0;border:0;break-inside:avoid}
-.sub{margin:38px 0 0;padding:20px;background:var(--pn);border:1px solid #2f6ea8;border-radius:10px}
+/* The signup box now sits directly under the header rather than at the foot of
+   the page, so the margins are inverted: no gap above, breathing room below
+   before the numbers. Leaving the old 38px-top/0-bottom would have hung it off
+   the header and jammed it against the stat cards. */
+.sub{margin:0 0 24px;padding:20px;background:var(--pn);border:1px solid #2f6ea8;border-radius:10px}
 .sub h2{margin:0 0 6px;font-size:17px}
 .subf{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 10px}
 .subf input,.subf select{flex:1 1 200px;min-width:0;padding:9px 11px;border-radius:7px;
@@ -214,6 +218,15 @@ color:#06121f;font-weight:600;font-size:14px;cursor:pointer;white-space:nowrap}
 }
 footer{margin-top:44px;padding-top:16px;border-top:1px solid var(--ln);
 color:var(--dm);font-size:12px;line-height:1.7}
+
+/* Sortable columns. The arrow is drawn in CSS from the aria-sort attribute the
+   script sets, so the accessible state and the visible state cannot disagree. */
+th[data-s]{cursor:pointer;user-select:none;-webkit-user-select:none;white-space:nowrap}
+th[data-s]:hover,th[data-s]:focus{color:var(--ac)}
+th[data-s]:focus{outline:1px solid var(--ac);outline-offset:2px}
+th[data-s]::after{content:"\\2195";margin-left:5px;font-size:10px;opacity:.35}
+th[data-s][aria-sort="ascending"]::after{content:"\\2191";opacity:1;color:var(--ac)}
+th[data-s][aria-sort="descending"]::after{content:"\\2193";opacity:1;color:var(--ac)}
 """
 
 
@@ -259,6 +272,57 @@ def density_pill(d: Optional[str]) -> str:
     return f'<span class="p {cls}">{esc(d or "—")}</span>'
 
 
+# The only JavaScript on the site, and it is strictly additive: every table is
+# fully readable and correctly ordered with scripting disabled. Sorting reads a
+# numeric `data-s` attribute rather than the visible text, because "$5.7B" sorts
+# before "$97K" as a string and "—" is not a number at all. Rows with no value
+# stay at the bottom in both directions rather than flipping to the top, which is
+# what people actually mean by "sort by bidders".
+SORT_JS = """<script>
+(function(){
+ document.querySelectorAll('table').forEach(function(t){
+  var hs=t.querySelectorAll('th[data-s]');
+  if(!hs.length)return;
+  hs.forEach(function(h){
+   h.tabIndex=0;h.setAttribute('role','button');
+   var go=function(){
+    var i=h.cellIndex,
+        dir=h.getAttribute('aria-sort')==='ascending'?-1:1;
+    hs.forEach(function(o){o.removeAttribute('aria-sort');});
+    h.setAttribute('aria-sort',dir===1?'ascending':'descending');
+    var rows=Array.prototype.slice.call(t.rows,1);
+    rows.sort(function(a,b){
+     var x=parseFloat(a.cells[i].getAttribute('data-s')),
+         y=parseFloat(b.cells[i].getAttribute('data-s')),
+         xn=isNaN(x),yn=isNaN(y);
+     if(xn&&yn)return 0;
+     if(xn)return 1;
+     if(yn)return -1;
+     return (x-y)*dir;
+    });
+    var f=document.createDocumentFragment();
+    rows.forEach(function(r){f.appendChild(r);});
+    t.tBodies[0].appendChild(f);
+   };
+   h.addEventListener('click',go);
+   h.addEventListener('keydown',function(e){
+    if(e.key==='Enter'||e.key===' '){e.preventDefault();go();}
+   });
+  });
+ });
+})();
+</script>"""
+
+# Ranking for the "Last time" column. The visible cell is a word, but the useful
+# order is how contested the contract was, so sort on that instead of the label.
+DENSITY_RANK = {"uncontested": 0, "low": 1, "moderate": 2, "high": 3}
+
+
+def sort_key(value) -> str:
+    """Render a data-s attribute, or nothing when there is no value to sort on."""
+    return "" if value is None else f' data-s="{value}"'
+
+
 def page(title: str, desc: str, body: str, depth: int = 0) -> str:
     root = "../" * depth
     # Search Console verification is emitted by the generator, not dropped in as
@@ -274,8 +338,8 @@ def page(title: str, desc: str, body: str, depth: int = 0) -> str:
 <style>{CSS}</style></head><body><div class="w">
 <header><h1><a href="{root}index.html" style="color:inherit">{SITE}</a></h1>
 <p class="sb">{esc(TAG)}</p></header>
-{body}
 {signup_block()}
+{body}
 <footer>Built from the Government of Canada <strong>Proactive Publication of Contracts</strong>
 dataset (contracts over $10,000), Treasury Board of Canada Secretariat.
 Open Government Licence – Canada.<br>
@@ -284,7 +348,7 @@ spend. Only services and construction contracts are shown, where the published
 "Contract Period End Date or Delivery Date" field is defined as the end of the
 performance period. Published quarterly, so the most recent quarter may not appear.
 Not affiliated with the Government of Canada.</footer>
-</div></body></html>"""
+</div>{SORT_JS}</body></html>"""
 
 
 def contract_table(rows: list[dict], show: tuple[str, ...] = ("dept", "cat"),
@@ -297,12 +361,16 @@ def contract_table(rows: list[dict], show: tuple[str, ...] = ("dept", "cat"),
     `depth` is how many folders deep the containing page is, so relative links
     resolve from both the root index and from pages inside folder/.
     """
-    head = "<tr><th>Expires</th><th class='n'>Value</th><th>Incumbent</th>"
+    # data-s marks a column as sortable. Only the four numeric/ordinal columns
+    # get it — sorting "Incumbent" alphabetically is a different feature and a
+    # sort control that does nothing useful is worse than no control.
+    head = ("<tr><th data-s>Expires</th><th class='n' data-s>Value</th>"
+            "<th>Incumbent</th>")
     if "dept" in show:
         head += "<th>Department</th>"
     if "cat" in show:
         head += "<th>Category</th>"
-    head += "<th class='n'>Bidders</th><th>Last time</th></tr>"
+    head += "<th class='n' data-s>Bidders</th><th data-s>Last time</th></tr>"
 
     out = []
     for c in rows[:limit]:
@@ -315,8 +383,9 @@ def contract_table(rows: list[dict], show: tuple[str, ...] = ("dept", "cat"),
         ref = c.get("reference_number")
         ref_html = f'<br><span class="ref">{esc(str(ref)[:34])}</span>' if ref else ""
         cells = [
-            f'<td>{bucket_pill(c.get("expiry_bucket"))} <span class="d">{days}d</span></td>',
-            f'<td class="n">{money(c.get("contract_value"))}</td>',
+            f'<td{sort_key(days)}>{bucket_pill(c.get("expiry_bucket"))} '
+            f'<span class="d">{days}d</span></td>',
+            f'<td class="n"{sort_key(c.get("contract_value"))}>{money(c.get("contract_value"))}</td>',
             f'<td>{entity_link("incumbent", c.get("vendor_key"), (c.get("vendor_name") or "—")[:38], depth)}{ref_html}</td>',
         ]
         if "dept" in show:
@@ -325,8 +394,10 @@ def contract_table(rows: list[dict], show: tuple[str, ...] = ("dept", "cat"),
         if "cat" in show:
             cat_txt = (c.get("category_name") or c.get("commodity_code") or "")[:38]
             cells.append(f'<td class="d">{entity_link("category", c.get("category_key"), cat_txt, depth)}</td>')
-        cells.append(f'<td class="n d">{bids if bids is not None else "—"}</td>')
-        cells.append(f'<td>{density_pill(c.get("competition_density"))}</td>')
+        cells.append(f'<td class="n d"{sort_key(bids)}>'
+                     f'{bids if bids is not None else "—"}</td>')
+        cells.append(f'<td{sort_key(DENSITY_RANK.get(c.get("competition_density")))}>'
+                     f'{density_pill(c.get("competition_density"))}</td>')
         out.append("<tr>" + "".join(cells) + "</tr>")
     # Wrapped: a 6-column table on a 375px viewport otherwise pushes the whole
     # page sideways, which Google reports as a mobile-usability failure
