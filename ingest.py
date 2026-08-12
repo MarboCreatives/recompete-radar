@@ -73,7 +73,14 @@ class Contract:
 
     buyer_org: Optional[str]          # owner_org_title - department
     buyer_org_code: Optional[str]     # owner_org
-    buyer_name: Optional[str]         # named contact (100% on recent data)
+
+    # NOTE: the source has a `buyer_name` column holding the named individual who
+    # let the contract - 4,318 distinct people. It is deliberately NOT a field
+    # here. Nothing downstream uses it, and anything ingested eventually leaks:
+    # into the pipeline JSON, into the published workflow artifact, into the
+    # SQLite file. Not collecting it is the only version of "we don't publish it"
+    # that cannot be undone by a later change. brief.py keeps a runtime guard
+    # against the field as a second line of defence.
 
     description_en: Optional[str]
     description_fr: Optional[str]
@@ -269,7 +276,7 @@ def normalize(row: dict, today: Optional[date] = None) -> Contract:
         country_of_vendor=row.get("country_of_vendor") or None,
         buyer_org=row.get("owner_org_title") or None,
         buyer_org_code=row.get("owner_org") or None,
-        buyer_name=row.get("buyer_name") or None,
+        # row["buyer_name"] is intentionally dropped here - see the Contract docstring.
         description_en=row.get("description_en") or None,
         description_fr=row.get("description_fr") or None,
         commodity_code=row.get("commodity_code") or None,
@@ -419,7 +426,7 @@ def iter_all_rows(max_rows: Optional[int] = None, throttle: float = 0.3) -> Iter
 # Output
 # --------------------------------------------------------------------------
 
-# Indexes only. The CREATE TABLE is generated from the dataclass at runtime —
+# Indexes only. The CREATE TABLE is generated from the dataclass at runtime -
 # hand-writing the column list is how vendor_key and category_name silently
 # desynced and broke a 13-minute production run at the very last step.
 INDEXES = """
@@ -557,6 +564,16 @@ def self_test(fixture_path: str) -> int:
     print(f"[{'PASS' if ok else 'FAIL'}] derived fields: vendor_key {vk}/{len(deduped)}, "
           f"category_name {cn}/{len(deduped)}")
 
+    # 9. The fixture itself must not carry personal data. It ships in a public
+    #    repository, so a real buyer_name here is published just as surely as
+    #    one on the site. Values are redacted; this keeps them redacted.
+    people = sorted({str(r.get("buyer_name")) for r in raw
+                     if r.get("buyer_name") not in (None, "", "NA", "REDACTED")})
+    ok = not people
+    failures += 0 if ok else 1
+    print(f"[{'PASS' if ok else 'FAIL'}] fixture carries no personal names: "
+          f"{len(people)} found")
+
     # ---- descriptive output ----
     print("\n" + "-" * 68)
     print("WHAT THE PIPELINE PRODUCES FROM THIS SAMPLE")
@@ -659,13 +676,24 @@ def main() -> int:
     )
     print(f"recompete pipeline -> {len(live):,} contracts")
 
-
-
     # The site generator consumes this file. Writing it is the default, not an
     # option, so the ingest and the build cannot silently drift apart again.
     # JSON first: it is what build_site.py consumes. SQLite is a convenience.
+    payload = [asdict(c) for c in live]
+
+    # This file is uploaded as a workflow artifact, and artifacts on a PUBLIC
+    # repository are downloadable by anyone with a GitHub account. Treat it as
+    # published. Fail the run rather than write a personal field into it.
+    FORBIDDEN = ("buyer_name",)
+    leaked = sorted({f for row in payload for f in FORBIDDEN if f in row})
+    if leaked:
+        print(f"ABORT: personal field(s) {leaked} present in {args.pipeline_out}. "
+              f"This file is public once uploaded - refusing to write it.",
+              file=sys.stderr)
+        return 3
+
     with open(args.pipeline_out, "w", encoding="utf-8") as fh:
-        json.dump([asdict(c) for c in live], fh)
+        json.dump(payload, fh)
     print(f"wrote {args.pipeline_out}  ({os.path.getsize(args.pipeline_out)/1e6:.1f} MB)")
 
     missing = [f for f in ("vendor_key", "category_name")
