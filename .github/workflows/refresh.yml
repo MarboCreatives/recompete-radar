@@ -90,6 +90,16 @@ jobs:
           cp google769a0788f8481792.html site/
           test -s site/google769a0788f8481792.html
 
+      # The custom domain. GitHub stores this in repo settings, but an
+      # Actions-built site replaces the whole published tree on every deploy,
+      # and a deploy without a CNAME can drop the domain — which would silently
+      # send every visitor back to the github.io address. Writing it on each
+      # build makes that impossible.
+      - name: Set the custom domain
+        run: |
+          echo "recompeteradar.ca" > site/CNAME
+          test -s site/CNAME
+
       - name: Keep the dataset as a downloadable artifact
         uses: actions/upload-artifact@v4
         with:
