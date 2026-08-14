@@ -219,6 +219,15 @@ color:#06121f;font-weight:600;font-size:14px;cursor:pointer;white-space:nowrap}
 footer{margin-top:44px;padding-top:16px;border-top:1px solid var(--ln);
 color:var(--dm);font-size:12px;line-height:1.7}
 
+/* Primary navigation. Two separate users asked for browse-by-category when it
+   already existed, because the only route to it was a link at the foot of the
+   landing page. It now sits under the masthead on every page. */
+.nav{display:flex;flex-wrap:wrap;gap:8px;margin:13px 0 0}
+.nav a{display:inline-block;padding:5px 12px;border:1px solid var(--ln);
+border-radius:20px;background:var(--pn);color:var(--tx);font-size:12.5px}
+.nav a:hover{border-color:var(--ac);color:var(--ac);text-decoration:none}
+@media(max-width:560px){.nav a{font-size:12px;padding:5px 10px}}
+
 /* Sortable columns. The arrow is drawn in CSS from the aria-sort attribute the
    script sets, so the accessible state and the visible state cannot disagree. */
 th[data-s]{cursor:pointer;user-select:none;-webkit-user-select:none;white-space:nowrap}
@@ -337,7 +346,13 @@ def page(title: str, desc: str, body: str, depth: int = 0) -> str:
 <meta name="description" content="{esc(desc)}">{gv}
 <style>{CSS}</style></head><body><div class="w">
 <header><h1><a href="{root}index.html" style="color:inherit">{SITE}</a></h1>
-<p class="sb">{esc(TAG)}</p></header>
+<p class="sb">{esc(TAG)}</p>
+<nav class="nav" aria-label="Browse the dataset">
+<a href="{root}index.html">Expiring soonest</a>
+<a href="{root}category/index.html">Browse by category</a>
+<a href="{root}department/index.html">Browse by department</a>
+<a href="{root}incumbent/index.html">Browse by incumbent</a>
+</nav></header>
 {signup_block()}
 {body}
 <footer>Built from the Government of Canada <strong>Proactive Publication of Contracts</strong>
@@ -665,10 +680,25 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
     with_bids = sum(1 for r in live if r.get("number_of_bids") is not None)
     uncontested = sum(1 for r in live if r.get("competition_density") == "uncontested")
 
+    # Browse controls used to sit at the foot of this page. Two users asked for
+    # filtering that already existed because they never scrolled that far, so the
+    # grid is now built here and placed above the 60-row table.
+    browse_grid = (
+        '<div class="g">'
+        + f'<div><h2>By department</h2><ul>{toplist(depts,"department")}</ul>'
+          f'<p><a href="department/index.html">All departments →</a></p></div>'
+        + f'<div><h2>By incumbent</h2><ul>{toplist(vendors,"incumbent")}</ul>'
+          f'<p><a href="incumbent/index.html">All incumbents →</a></p></div>'
+        + f'<div><h2>By category</h2><ul>{toplist(cats,"category")}</ul>'
+          f'<p><a href="category/index.html">All categories →</a></p></div>'
+        + "</div>")
+
     body = (
         stat_cards([(f"{len(live):,}", "Live contracts"), (money(total_value), "Pipeline value")]
                    + [(f"{counts[b]:,}", b) for b in ("0-6mo", "6-12mo", "12-24mo", "24mo+")]
                    + [(money(median_value), "Median contract")])
+        + "<h2>Browse by department, incumbent or category</h2>"
+        + browse_grid
         # Every figure in this paragraph is computed from the dataset on this page.
         # It previously cited a 70-80% incumbent win rate taken from a US vendor's
         # marketing — a foreign statistic, unattributed, on a site whose whole value
@@ -680,15 +710,7 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
           f'drew one bid or none</strong> when last awarded. The median contract is '
           f'{money(median_value)}; the largest {min(100, len(live))} account for '
           f'{top100_share:.0f}% of total value.</p>'
-        + contract_table(live, limit=60)
-        + '<div class="g">'
-        + f'<div><h2>By department</h2><ul>{toplist(depts,"department")}</ul>'
-          f'<p><a href="department/index.html">All departments →</a></p></div>'
-        + f'<div><h2>By incumbent</h2><ul>{toplist(vendors,"incumbent")}</ul>'
-          f'<p><a href="incumbent/index.html">All incumbents →</a></p></div>'
-        + f'<div><h2>By category</h2><ul>{toplist(cats,"category")}</ul>'
-          f'<p><a href="category/index.html">All categories →</a></p></div>'
-        + "</div>")
+        + contract_table(live, limit=60))
     open(os.path.join(outdir, "index.html"), "w", encoding="utf-8").write(
         page(f"{SITE} — federal contracts up for renewal",
              f"{len(live):,} Canadian federal services contracts worth {money(total_value)} "
