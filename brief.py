@@ -30,6 +30,28 @@ import sys
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
+# The suppression rule is IMPORTED, never copied. The site withholds the names
+# of vendors who are private people; this file reads the pipeline JSON straight
+# from the ingest, where vendor_name is still raw. Without this import the email
+# would send out exactly what the site hides. Importing keeps one rule in one
+# place so the two cannot drift apart.
+import build_site
+
+# Where readers reply. Kept as a constant rather than a parameter so adding it
+# does not change every render signature and every self-test call site.
+CONTACT_EMAIL = "hello@recompeteradar.ca"
+
+# One short question to readers, set per week from --question. The default is a
+# standing question, so a week where nobody sets one still reads as intended
+# rather than breaking or going out blank.
+DEFAULT_QUESTION = ("What would make this worth opening every week? "
+                    "Reply and tell me.")
+BRIEF_QUESTION = DEFAULT_QUESTION
+
+# An optional block for the occasional note from the operator, set from --note.
+# Empty means nothing is rendered at all.
+BRIEF_NOTE = ""
+
 WINDOW_DAYS = 365          # the planning threshold subscribers care about
 LOOKBACK_DAYS = 7          # one week's worth of crossings
 MAX_ROWS = 25              # editorial cap; the rest are pointed at the site
@@ -118,6 +140,9 @@ def render_text(rows: list[dict], as_of: date, business: str, address: str,
         L.append("Agencies typically begin recompete planning 12-18 months out, "
                  "so these are the ones to be asking about now.")
         L.append("")
+        if BRIEF_NOTE:
+            L.append(BRIEF_NOTE)
+            L.append("")
         for r in shown:
             L.append(f"* {money(r.get('contract_value'))} — {r.get('vendor_name') or 'Unknown'}")
             L.append(f"  {r.get('buyer_org') or 'Unknown department'}")
@@ -127,11 +152,19 @@ def render_text(rows: list[dict], as_of: date, business: str, address: str,
         if len(rows) > MAX_ROWS:
             L.append(f"...and {len(rows) - MAX_ROWS} more. Full list: {site}")
             L.append("")
+    if BRIEF_QUESTION:
+        L.append("-" * 60)
+        L.append(BRIEF_QUESTION)
+        L.append("")
     L.append("-" * 60)
     L.append(f"{business}, {address}")
     L.append(site)
-    L.append("You're receiving this because you asked for the weekly brief. "
-             "Unsubscribe any time using the link below.")
+    L.append(f"Questions, corrections or suggestions: {CONTACT_EMAIL}")
+    L.append("")
+    L.append("You are getting this because you signed up for the weekly brief "
+             f"at {site}. The site gets changed based on what readers ask for, "
+             "so tell me what is missing. Unsubscribe any time using the link "
+             "below.")
     return "\n".join(L)
 
 
@@ -184,7 +217,7 @@ def render_html(rows: list[dict], as_of: date, business: str, address: str,
 <a href="{esc(site)}" style="color:#888">{esc(site)}</a>
 </p>
 <p style="margin:0;font-size:12px;color:#888">
-You're receiving this because you asked for the weekly brief. You can
+You are getting this because you signed up for the weekly brief at recompeteradar.ca. Questions, corrections or suggestions go to {esc(CONTACT_EMAIL)}, and the site gets changed based on what readers ask for. You can
 unsubscribe at any time using the link below.
 </p>
 </div>"""
@@ -234,6 +267,20 @@ def self_test() -> int:
         if "Jane Doe" in out:
             fails.append(f"5. {fn.__name__} leaked buyer_name")
 
+    # 5b. A private person's name must never reach a subscriber. Test 5 above
+    # passes trivially, because ingest drops buyer_name long before this file
+    # sees it. THIS is the check that bites: the site withholds sole proprietors
+    # but the brief reads the pipeline JSON directly, where vendor_name is raw.
+    person = [mk(365, vendor_name="TREMBLAY, Marie")]
+    build_site.VENDOR_ALLOWLIST = set()
+    build_site.suppress_individuals(person)
+    for fn in (render_text, render_html):
+        out = fn(crossings(person, today), today, "B", "A", "https://x")
+        if "TREMBLAY" in out:
+            fails.append(f"5b. {fn.__name__} leaked an individual's name")
+        elif build_site.PERSON_LABEL not in out:
+            fails.append(f"5b. {fn.__name__} dropped the withheld label")
+
     # 6. HTML escaping of hostile vendor names
     xss = [mk(365, vendor_name='<script>alert(1)</script>')]
     out = render_html(crossings(xss, today), today, "B", "A", "https://x")
@@ -277,7 +324,19 @@ def main() -> int:
                     default="916 Pembroke St. W, Pembroke, Ontario K8A 5P8")
     ap.add_argument("--site", default="https://marbocreatives.github.io/recompete-radar")
     ap.add_argument("--self-test", action="store_true")
+    ap.add_argument("--question", default="",
+                    help="One short question to readers, for this edition only.\n"
+                         "Empty uses the standing question, so a skipped week\n"
+                         "still reads as intended.")
+    ap.add_argument("--note", default="",
+                    help="An optional block near the top, for the monthly note\n"
+                         "from the operator or a one-off announcement. Empty\n"
+                         "renders nothing at all.")
     a = ap.parse_args()
+
+    global BRIEF_QUESTION, BRIEF_NOTE
+    BRIEF_QUESTION = a.question.strip() or DEFAULT_QUESTION
+    BRIEF_NOTE = a.note.strip()
 
     if a.self_test:
         return self_test()
@@ -287,6 +346,13 @@ def main() -> int:
 
     as_of = parse_date(a.as_of) or date.today()
     rows = json.load(open(a.input, encoding="utf-8"))
+
+    # Apply the site's own suppression before anything is rendered. Without
+    # this the email sends out the individual names the site withholds.
+    build_site.VENDOR_ALLOWLIST = build_site.load_vendor_allowlist(
+        "vendor_allowlist.txt")
+    withheld = build_site.suppress_individuals(rows)
+    print(f"withheld {withheld:,} individual vendor names")
     sel = crossings(rows, as_of)
 
     h = render_html(sel, as_of, a.business_name, a.mailing_address, a.site)
