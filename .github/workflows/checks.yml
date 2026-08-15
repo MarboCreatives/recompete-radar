@@ -37,17 +37,30 @@ jobs:
       - name: Verify the brief renders correctly
         run: python3 brief.py --self-test
 
-      # The real builder and the real gate, run against the committed fixture of
-      # 110 rows. buyer_name is already REDACTED in that file, so this publishes
-      # nothing. The values below only have to satisfy the CASL and endpoint
-      # validation; they never reach the live site.
-      - name: Smoke test the build and the audit against the fixture
+      # The real pipeline, end to end, against the committed fixture. ingest
+      # --from-file swaps the network for a local file and changes nothing else,
+      # so this is the same code that runs in production. The date shift keeps
+      # the frozen fixture inside the recompete window; without it the check
+      # would decay into a no-op as the snapshot aged.
+      #
+      # buyer_name is already REDACTED in the fixture and ingest aborts if it
+      # ever reaches the pipeline file, so nothing personal is produced here.
+      # The CASL and endpoint values are throwaway and never reach the site.
+      - name: Smoke test the whole pipeline against the fixture
         run: |
+          python3 ingest.py \
+            --from-file fixture_contracts.json \
+            --shift-dates-years 3 \
+            --pipeline-out /tmp/smoke-pipeline.json
+
           python3 build_site.py \
-            --input fixture_contracts.json \
+            --input /tmp/smoke-pipeline.json \
             --out /tmp/smoke-site \
             --base-url "https://example.invalid" \
             --signup-action "https://app.kit.com/forms/9791323/subscriptions" \
             --business-name "Smoke Test" \
             --mailing-address "1 Test St, Testville, Ontario A1A 1A1"
-          python3 audit.py --input fixture_contracts.json --site /tmp/smoke-site
+
+          python3 audit.py \
+            --input /tmp/smoke-pipeline.json \
+            --site /tmp/smoke-site
