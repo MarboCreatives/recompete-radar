@@ -58,6 +58,13 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", required=True)
     ap.add_argument("--site", required=True)
+    ap.add_argument("--allow-small", action="store_true",
+                    help="Skip the plausibility floors and widen the landing-page\n"
+                         "value tolerance. For the offline fixture check ONLY: a\n"
+                         "110-row fixture cannot meet floors written for 26,000\n"
+                         "real contracts. Production never passes this, so the\n"
+                         "real gate is unchanged. Every structural check still\n"
+                         "runs either way.")
     a = ap.parse_args()
 
     rows = json.load(open(a.input, encoding="utf-8"))
@@ -251,8 +258,12 @@ def main() -> int:
         check("landing page contract count matches data",
               shown == str(len(live)), f"page says {shown}, data has {len(live)}")
         pv = money_to_float(m.get("Pipeline value", "nan"))
-        check("landing page value within 0.5% of data",
-              abs(pv - total_value) / total_value < 0.005 if total_value else False,
+        # money() renders to one decimal place, so at fixture scale the display
+        # rounding alone ($6.94M shown as $7.0M) exceeds 0.5%. At real scale it
+        # is invisible. Widen the tolerance rather than drop the check.
+        tol = 0.05 if a.allow_small else 0.005
+        check(f"landing page value within {tol:.1%} of data",
+              abs(pv - total_value) / total_value < tol if total_value else False,
               f"page {pv:,.0f} vs data {total_value:,.0f}")
         for b in ("0-6mo", "6-12mo", "12-24mo", "24mo+"):
             want = sum(1 for r in live if r.get("expiry_bucket") == b)
@@ -315,6 +326,13 @@ def main() -> int:
         ("category names >= 100", n_cat, 100),
         ("vendor identities >= 5,000", n_ven, 5_000),
     ]
+    # The floors detect a TRUNCATED PRODUCTION PIPELINE. They are meaningless
+    # against a deliberately small fixture, so the offline check skips them and
+    # says so out loud rather than passing silently.
+    if a.allow_small:
+        print("[SKIP] plausibility floors — --allow-small, fixture-scale input")
+        floors = []
+
     for label, actual, floor in floors:
         check(f"plausibility: {label}", actual >= floor,
               f"actual {actual:,}" + ("" if actual >= floor else f" — BELOW FLOOR {floor:,}, "
