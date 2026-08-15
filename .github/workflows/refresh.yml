@@ -11,7 +11,15 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths-ignore: ["**.md"]
+    # brief.py and its workflow have nothing to do with the site. An edit to
+    # either used to trigger this eighteen-minute rebuild and skip the checks
+    # that actually cover them. checks.yml runs on every push and covers all of
+    # it in about fifteen seconds.
+    paths-ignore:
+      - "**.md"
+      - "brief.py"
+      - ".github/workflows/brief.yml"
+      - ".github/workflows/checks.yml"
 
 permissions:
   contents: read
