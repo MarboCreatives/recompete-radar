@@ -706,7 +706,7 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
     SIGNUP_PER_WEEK = round(SIGNUP_CROSSING_N / 52)
     SIGNUP_YEAR_VALUE = sum(r.get("contract_value") or 0 for r in _crossing)
 
-    written = {"department": 0, "incumbent": 0, "category": 0}
+    written = {"department": 0, "incumbent": 0, "category": 0, "province": 0}
     urls = ["index.html"]
 
     # key -> actual filename written. Links MUST be built from this, never
