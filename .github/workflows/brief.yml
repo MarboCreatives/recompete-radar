@@ -49,13 +49,27 @@ jobs:
 
       # No --as-of: defaults to today, which is what makes the 7-day crossing
       # window land correctly without any stored state.
+      # BRIEF_QUESTION and BRIEF_NOTE are repository variables, so the weekly
+      # question and the monthly note can be changed without touching code. An
+      # unset variable is an empty string, which brief.py treats as "use the
+      # standing question" and "render no note", so a skipped week is harmless.
+      #
+      # They go through env rather than straight into the run line. A variable
+      # is not a secret and is interpolated by the workflow templater before the
+      # shell ever sees it, so a stray quote in the text would break the command
+      # or worse. Through env it is just a string.
       - name: Build this week's brief
+        env:
+          BRIEF_QUESTION: ${{ vars.BRIEF_QUESTION }}
+          BRIEF_NOTE: ${{ vars.BRIEF_NOTE }}
         run: |
           python3 brief.py \
             --input recompete_pipeline.json \
             --html-out brief.html \
             --text-out brief.txt \
-            --site "${{ vars.SITE_URL }}"
+            --site "${{ vars.SITE_URL }}" \
+            --question "$BRIEF_QUESTION" \
+            --note "$BRIEF_NOTE"
 
       - name: Show the summary in the run log
         run: |
