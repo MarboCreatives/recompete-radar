@@ -20,6 +20,15 @@ import re
 import sys
 from collections import Counter, defaultdict
 
+# The site withholds the names of vendors who are private people. The rule is
+# IMPORTED, never copied, so the audit and the builder cannot drift apart. This
+# does not weaken the gate: the count checks below test that the site matches the
+# data, so the data has to carry the same transformation the site does. A leak
+# check is added further down to test the rule actually fired.
+import html
+
+import build_site
+
 PASS, FAIL, WARN = "PASS", "FAIL", "WARN"
 results: list[tuple[str, str, str]] = []
 
@@ -50,6 +59,9 @@ def main() -> int:
     a = ap.parse_args()
 
     rows = json.load(open(a.input, encoding="utf-8"))
+
+    build_site.VENDOR_ALLOWLIST = build_site.load_vendor_allowlist("vendor_allowlist.txt")
+    withheld = build_site.suppress_individuals(rows)
     site = a.site
 
     # ---- recompute the truth independently -------------------------------
@@ -152,6 +164,27 @@ def main() -> int:
     rb_ok = bool(rb_txt) and "Sitemap:" in rb_txt
     check("robots.txt present and references sitemap", rb_ok,
           "" if rb_ok else ("missing" if not rb_txt else "no Sitemap line"))
+
+    # ---- individual people must not be published as incumbents -------------
+    # Never print a matched name. This log is public on a public repo, and the
+    # list of withheld names IS the personal information being protected.
+    def _listed_incumbent_names():
+        out = []
+        d = os.path.join(site, "incumbent")
+        for f in os.listdir(d):
+            if not f.startswith("index"):
+                continue
+            src = open(os.path.join(d, f), encoding="utf-8").read()
+            out += re.findall(r'<li><a href="[^"]+">([^<]+)</a>', src)
+            out += [m.split("\u2014")[0].strip()
+                    for m in re.findall(r'<li class="d">([^<]+)</li>', src)]
+        return [html.unescape(n) for n in out]
+
+    leaked = {n for n in _listed_incumbent_names() if build_site.is_individual(n)}
+    check("no individual person is listed as an incumbent", not leaked,
+          "" if not leaked else f"{len(leaked)} still listed")
+    check("individual vendor names are being withheld", withheld > 0,
+          f"{withheld:,} withheld")
 
     # ---- every group must appear somewhere, not just the ones with pages ---
     def listed_count(folder):
