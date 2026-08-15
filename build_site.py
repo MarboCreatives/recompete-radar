@@ -69,6 +69,14 @@ SIGNUP_CATEGORIES: list[str] = []   # populated from the data in build()
 SIGNUP_BUSINESS = ""
 SIGNUP_ADDRESS = ""
 SIGNUP_CONTACT = ""
+
+# The address the double opt-in confirmation is sent from. 17 of the first 32
+# signups never confirmed because the confirmation went out from a free gmail.com
+# address through the mail provider's servers: gmail.com does not authorise those
+# servers, so the mail failed authentication and was filed as spam or dropped with
+# no bounce. Telling people what to look for is the cheap half of the fix. This
+# MUST match the default from address set in the mail provider.
+CONFIRM_SENDER = "hello@recompeteradar.ca"
 SIGNUP_PER_WEEK = 0        # derived in build(); see note there
 SIGNUP_YEAR_VALUE = 0.0
 SIGNUP_CROSSING_N = 0
@@ -83,7 +91,8 @@ GOOGLE_VERIFICATION = ""
 # written, whichever folder was written first would link to nothing.
 # Links are built from this map, never by re-deriving the slug from a display
 # name — collision-renamed pages would be silently orphaned.
-FILENAMES: dict[str, dict[str, str]] = {"department": {}, "incumbent": {}, "category": {}}
+FILENAMES: dict[str, dict[str, str]] = {"department": {}, "incumbent": {}, "category": {},
+                                        "province": {}}
 
 
 def entity_link(folder: str, key: Optional[str], text: str, depth: int) -> str:
@@ -145,6 +154,9 @@ def signup_block() -> str:
     </select>
     <button type="submit">Get the brief</button>
   </form>
+  <p class="fine">One email will arrive from <strong>{esc(CONFIRM_SENDER)}</strong>
+  asking you to confirm. If it is not in your inbox, look in spam or promotions and
+  mark it &quot;not spam&quot;, or the weekly brief will not reach you either.</p>
   <p class="fine">Free, weekly. <strong>You can withdraw your consent and
   unsubscribe at any time</strong>, using the link in every email. We may
   occasionally introduce you to bid consultants or proposal specialists relevant
@@ -352,6 +364,7 @@ def page(title: str, desc: str, body: str, depth: int = 0) -> str:
 <a href="{root}category/index.html">Browse by category</a>
 <a href="{root}department/index.html">Browse by department</a>
 <a href="{root}incumbent/index.html">Browse by incumbent</a>
+<a href="{root}province/index.html">Browse by supplier province</a>
 </nav></header>
 {signup_block()}
 {body}
@@ -476,10 +489,184 @@ def add_category_key(rows: list[dict]) -> None:
         r["category_key"] = re.sub(r"\s+", " ", name).lower() or (r.get("commodity_code") or "")
 
 
+# Postal-code prefix -> province. The published field carries only the vendor's
+# forward sortation area (three characters, e.g. "H4B"), and it is the address of
+# the SUPPLIER. The dataset has no place-of-performance field at all, so this must
+# never be labelled as where the work is. "X" spans both NT and NU and cannot be
+# split, so it is reported as the pair rather than guessed.
+PROVINCE_CODE = {"A": "NL", "B": "NS", "C": "PE", "E": "NB",
+                 "G": "QC", "H": "QC", "J": "QC",
+                 "K": "ON", "L": "ON", "M": "ON", "N": "ON", "P": "ON",
+                 "R": "MB", "S": "SK", "T": "AB", "V": "BC",
+                 "X": "NT-NU", "Y": "YT"}
+
+PROVINCE_NAME = {"NL": "Newfoundland and Labrador", "NS": "Nova Scotia",
+                 "PE": "Prince Edward Island", "NB": "New Brunswick",
+                 "QC": "Quebec", "ON": "Ontario", "MB": "Manitoba",
+                 "SK": "Saskatchewan", "AB": "Alberta", "BC": "British Columbia",
+                 "NT-NU": "Northwest Territories and Nunavut", "YT": "Yukon"}
+
+
+def add_province_key(rows: list[dict]) -> None:
+    """Tag each contract with the supplier province, where one can be read.
+
+    Contracts with no postal code, or a foreign one, get no key and are simply
+    absent from the province pages. An "Unknown" province page would be a large
+    page that tells the reader nothing, which is the thin content this build
+    already works to avoid.
+    """
+    for r in rows:
+        pc = (r.get("vendor_postal_code") or "").strip().upper()
+        code = PROVINCE_CODE.get(pc[:1]) if pc else None
+        r["province_key"] = code or ""
+        r["province_name"] = PROVINCE_NAME.get(code or "", "")
+
+
+# --- Withholding the names of individual people ------------------------------
+# The source names sole proprietors: interpreters, translators and consultants
+# contracting as themselves. Publishing a searchable page per person, with their
+# contract values, amplifies personal information well beyond what the government
+# already does. The contract itself stays in every total; only the name goes.
+
+PERSON_LABEL = "Individual supplier (name withheld)"
+
+# Any of these tokens in a name means it is an organisation, not a person.
+# Generous on purpose: a missed suppression exposes someone, a false positive
+# only withholds a company name that the tender reference still leads back to.
+CORP_WORDS = frozenset("""
+INC INCORPORATED LTD LTEE LIMITED LIMITEE LLP LLC LP ULC CORP CORPORATION CO COMPANY
+COMPAGNIE SENC SENCRL SRL LDA ENR ENRG GMBH PLC AG SA SAS SARL NV BV PTY GROUP GROUPE
+SERVICES SERVICE SOLUTIONS CONSULTING CONSULTANTS CONSULTANT TECHNOLOGIES TECHNOLOGY
+SYSTEMS SYSTEMES ASSOCIATES ASSOCIES PARTNERS PARTNERSHIP HOLDINGS HOLDING ENTERPRISES
+ENTREPRISES INDUSTRIES INTERNATIONAL UNIVERSITY UNIVERSITE COLLEGE INSTITUTE INSTITUT
+SOCIETY SOCIETE ASSOCIATION FOUNDATION FONDATION TRUST BANK BANQUE SCHOOL ECOLE
+HOSPITAL CENTRE CENTER AGENCY AGENCE CANADA CANADIAN NATIONAL NATIONALE CONSTRUCTION
+ENGINEERING MARINE AVIATION LOGISTICS LOGISTIQUE MANAGEMENT MEDIA DESIGN STUDIO LABS
+LABORATORY LABORATOIRES CLINIC CLINIQUE FARMS RANCH AUTO MOTORS EQUIPMENT SUPPLY
+SUPPLIES PRODUCTS FOODS TRAVEL HOTEL RESORT PROPERTIES REALTY INSURANCE CAPITAL
+VENTURES GLOBAL WORLDWIDE NETWORK NETWORKS DIGITAL SOFTWARE DATA SECURITY STAFFING
+RECRUITMENT TRAINING ACADEMY PRESS PUBLISHING PRINTING TRANSPORT TRANSPORTATION
+SHIPPING ENERGY POWER ELECTRIC ELECTRICAL MECHANICAL PLUMBING ROOFING LANDSCAPING
+CLEANING MAINTENANCE REPAIR RENTAL LEASING IMPRIMERIE TRADUCTION TRANSLATION
+INTERPRETATION DBA OPERATING GENERAL AND ET THE OF DES DU LA LE LES GOVERNMENT
+GOUVERNEMENT MINISTRY MINISTERE BOARD COUNCIL CONSEIL COMMISSION OFFICE BUREAU
+DEPARTMENT CITY VILLE TOWN MUNICIPALITY COUNTY REGION PROVINCE FIRST NATION NATIONS
+BAND TRIBAL HEALTH SANTE LAW AVOCATS NOTAIRES ARCHITECTS ARCHITECTES SURVEYORS
+ACCOUNTING ACCOUNTANTS CPA SONS BROS BROTHERS ENTERPRISE COOPERATIVE COOP
+""".split())
+
+# Common given names, used only for the weaker second rule below. Deliberately
+# short: it exists to catch "GIVEN SURNAME" and "SURNAME GIVEN" forms that carry
+# no comma, not to be a census.
+GIVEN_NAMES = frozenset("""
+james john robert michael william david richard joseph thomas charles christopher
+daniel matthew anthony mark donald steven paul andrew joshua kenneth kevin brian
+george timothy ronald jason edward jeffrey ryan jacob gary nicholas eric stephen
+jonathan larry justin scott brandon benjamin samuel frank gregory raymond alexander
+patrick jack dennis jerry tyler aaron jose adam nathan henry douglas peter zachary
+kyle walter ethan jeremy harold keith christian roger noah gerald carl terry sean
+austin arthur lawrence jesse dylan bryan joe jordan billy bruce albert willie gabriel
+logan alan juan wayne roy ralph randy eugene vincent russell elmer louis philip
+johnny mary patricia jennifer linda elizabeth barbara susan jessica sarah karen nancy
+lisa margaret betty sandra ashley dorothy kimberly emily donna michelle carol amanda
+melissa deborah stephanie rebecca laura sharon cynthia kathleen amy shirley angela
+helen anna brenda pamela nicole ruth katherine samantha christine emma catherine
+debra virginia rachel carolyn janet maria heather diane julie joyce victoria kelly
+christina joan evelyn lauren judith megan cheryl andrea hannah martha jacqueline
+frances gloria ann teresa kathryn sara janice jean alice madison doris abigail julia
+judy grace denise amber marilyn danielle beverly charlotte natalie theresa diana
+brittany kayla alexis lori marie jeanne pascale olivier pierre jacques michel andre
+francois luc marc claude gilles yves serge alain sylvain martin nathalie sylvie
+isabelle chantal manon lucie helene johanne josee guylaine genevieve veronique
+stephane mathieu simon etienne benoit denis jean-pierre marie-claude
+""".split())
+
+# Names listed here are never suppressed. This is the correction channel for a
+# real company that the rules below match by accident.
+VENDOR_ALLOWLIST: set[str] = set()
+
+
+def _name_tokens(name: str) -> list[str]:
+    return [t for t in re.split(r"[^A-Za-z\u00C0-\u024F'\u2019-]+", name or "") if t]
+
+
+def _norm_name(name: str) -> str:
+    return re.sub(r"\s+", " ", (name or "").strip()).lower()
+
+
+def load_vendor_allowlist(path: str) -> set[str]:
+    """One name per line, # starts a comment. Missing file is not an error."""
+    out: set[str] = set()
+    if path and os.path.exists(path):
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.split("#", 1)[0].strip()
+                if line:
+                    out.add(_norm_name(line))
+    return out
+
+
+def is_individual(name: str) -> bool:
+    """True when a published vendor name is a private person, not an organisation.
+
+    Two rules, both measured against the full live vendor list before being used:
+
+    1. "SURNAME, Given" with EXACTLY ONE comma and one or two tokens on each side.
+       935 matches. The one-comma limit is what keeps multi-partner law firms out;
+       without it, three surnames in a row read as a person.
+    2. A two or three word name with no comma, containing a common given name.
+       411 matches. Weaker, hence the allowlist.
+
+    A rule matching any 2-3 word name WITHOUT the given-name test was tried and
+    rejected: it swept up 1,740 names including plain companies. Do not add it.
+    """
+    n = (name or "").strip()
+    if not n or any(ch.isdigit() for ch in n):
+        return False
+    toks = _name_tokens(n)
+    if not toks or any(t.upper() in CORP_WORDS for t in toks):
+        return False
+    if n.count(",") == 1:
+        left, right = (p.strip() for p in n.split(","))
+        lt, rt = _name_tokens(left), _name_tokens(right)
+        if 1 <= len(lt) <= 2 and 1 <= len(rt) <= 2:
+            return True
+    if "," not in n and 2 <= len(toks) <= 3:
+        if any(t.lower() in GIVEN_NAMES for t in toks):
+            return True
+    return False
+
+
+def suppress_individuals(rows: list[dict]) -> int:
+    """Withhold the names of vendors who are private people.
+
+    The contract stays in EVERY total - department, category, province, value and
+    bidder counts are all untouched. Only the displayed name changes. Blanking
+    vendor_key is enough to stop a page or an index entry being made, because
+    group() skips empty keys and entity_link() falls back to plain text. The
+    published tender reference stays visible, so the public record is traceable.
+
+    The list of suppressed names is deliberately NOT written to a file, an
+    artifact or the build log. That list IS the personal information. Workflow
+    artifacts and Actions logs on a public repo are readable by anyone, which is
+    exactly how buyer_name leaked before. Only the count is reported.
+    """
+    n = 0
+    for r in rows:
+        name = r.get("vendor_name") or ""
+        if _norm_name(name) in VENDOR_ALLOWLIST:
+            continue
+        if is_individual(name):
+            r["vendor_name"] = PERSON_LABEL
+            r["vendor_key"] = ""
+            n += 1
+    return n
+
+
 # ------------------------------------------------------------------ build
 
 def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
-    for sub in ("department", "incumbent", "category"):
+    for sub in ("department", "incumbent", "category", "province"):
         os.makedirs(os.path.join(outdir, sub), exist_ok=True)
 
     live = [r for r in rows if r.get("days_to_expiry") is not None
@@ -488,6 +675,8 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
     total_value = sum(r.get("contract_value") or 0 for r in live)
 
     add_category_key(live)
+    add_province_key(live)
+    suppress_individuals(live)
 
     # Dropdown options come from the data, so they match what people actually
     # bid on rather than a guessed list.
@@ -498,6 +687,7 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
     depts = group(live, "buyer_org")
     vendors = group(live, "vendor_key", "vendor_name")
     cats = group(live, "category_key", "category_name")
+    provs = group(live, "province_key", "province_name")
 
     counts = {"0-6mo": 0, "6-12mo": 0, "12-24mo": 0, "24mo+": 0}
     for r in live:
@@ -522,7 +712,7 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
     # key -> actual filename written. Links MUST be built from this, never
     # recomputed from the display name, or collision-renamed pages get orphaned.
     global FILENAMES
-    FILENAMES = {"department": {}, "incumbent": {}, "category": {}}
+    FILENAMES = {"department": {}, "incumbent": {}, "category": {}, "province": {}}
     filenames = FILENAMES
 
     def assign_filenames(groups: dict[str, dict], folder: str) -> list[tuple[str, dict]]:
@@ -588,6 +778,12 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
                    'published records. Related legal entities are listed separately, '
                    'so a corporate group\'s total exposure may be higher.</p>'
                    if folder == "incumbent" else "")
+                + ('<p class="sb">Province is read from the postal code of the '
+                   'supplier in the published record, so this is where the incumbent '
+                   'is based, not where the work is performed. The published data '
+                   'carries no place-of-performance field at all. Contracts with no '
+                   'postal code, or a foreign one, appear on no province page.</p>'
+                   if folder == "province" else "")
                 + "<h2>Contracts by expiry</h2>"
                 + contract_table(g["items"], show=show, limit=400, depth=1))
             open(path, "w", encoding="utf-8").write(page(title, desc, body, 1))
@@ -598,11 +794,13 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
     small_d = assign_filenames(depts, "department")
     small_v = assign_filenames(vendors, "incumbent")
     small_c = assign_filenames(cats, "category")
+    small_p = assign_filenames(provs, "province")
 
     # PASS 2 — render, now that cross-folder links can all be resolved.
     write_group_pages(depts, "department", "Department", ("cat",))
     write_group_pages(vendors, "incumbent", "Incumbent", ("dept", "cat"))
     write_group_pages(cats, "category", "Category", ("dept",))
+    write_group_pages(provs, "province", "Supplier province", ("dept", "cat"))
 
     # ---- index pages (keeps small groups crawlable and internally linked)
     def write_index(groups: dict[str, dict], small: list, folder: str, label: str) -> None:
@@ -660,6 +858,7 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
     write_index(depts, small_d, "department", "Department")
     write_index(vendors, small_v, "incumbent", "Incumbent")
     write_index(cats, small_c, "category", "Category")
+    write_index(provs, small_p, "province", "Supplier province")
 
     # ---- landing page
     def toplist(groups: dict[str, dict], folder: str, n: int = 12) -> str:
@@ -699,6 +898,10 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
                    + [(money(median_value), "Median contract")])
         + "<h2>Browse by department, incumbent or category</h2>"
         + browse_grid
+        + "<h2>By supplier province</h2>"
+        + '<p class="sb">Where the incumbent is based, read from the postal code in '
+          'the published record. Not where the work is performed.</p>'
+        + f'<ul class="cols3">{toplist(provs, "province", 12)}</ul>'
         # Every figure in this paragraph is computed from the dataset on this page.
         # It previously cited a 70-80% incumbent win rate taken from a US vendor's
         # marketing — a foreign statistic, unattributed, on a site whose whole value
@@ -773,6 +976,10 @@ def main() -> int:
                          "Required whenever --signup-action is set.")
     ap.add_argument("--contact-url", default="",
                     help="CASL: a contact web address. Defaults to --base-url.")
+    ap.add_argument("--vendor-allowlist", default="vendor_allowlist.txt",
+                    help="File of vendor names that must never be treated as\n"
+                         "individual people. One per line, # starts a comment.\n"
+                         "Missing file is fine.")
     ap.add_argument("--google-verification", default="",
                     help="Google Search Console token (the content=\"...\" value\n"
                          "only, not the whole meta tag).")
@@ -842,6 +1049,9 @@ def main() -> int:
                   file=sys.stderr)
             return 4
         GOOGLE_VERIFICATION = gv
+
+    global VENDOR_ALLOWLIST
+    VENDOR_ALLOWLIST = load_vendor_allowlist(args.vendor_allowlist)
 
     rows = json.load(open(args.input, encoding="utf-8"))
     print(f"loaded {len(rows):,} contracts from {args.input}")
