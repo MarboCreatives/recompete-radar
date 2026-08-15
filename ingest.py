@@ -634,6 +634,19 @@ def main() -> int:
     parser.add_argument("--pipeline-out", default="recompete_pipeline.json",
                         help="JSON consumed by build_site.py")
     parser.add_argument("--fixture", default=None, help="fixture path for --self-test")
+    parser.add_argument("--from-file", default=None,
+                        help="Read raw source rows from a local JSON file instead\n"
+                             "of the network, then run the normal pipeline. This is\n"
+                             "what lets CI exercise ingest, build and audit in\n"
+                             "seconds rather than waiting on a 15-minute download.\n"
+                             "Implies --full.")
+    parser.add_argument("--shift-dates-years", type=int, default=0,
+                        help="Add N years to every ISO date in a --from-file run.\n"
+                             "The committed fixture is a frozen snapshot, so its\n"
+                             "dates drift into the past and it would eventually hold\n"
+                             "no live contracts at all, quietly turning the smoke\n"
+                             "test into a no-op. Test use only; ignored without\n"
+                             "--from-file.")
     args = parser.parse_args()
 
     here = os.path.dirname(os.path.abspath(__file__))
@@ -645,7 +658,7 @@ def main() -> int:
             return 2
         return 1 if self_test(fixture) else 0
 
-    if not args.full:
+    if not args.full and not args.from_file:
         parser.print_help()
         return 0
 
@@ -655,7 +668,28 @@ def main() -> int:
 
     started = time.time()
     normalized: list[Contract] = []
-    for row in iter_all_rows(max_rows=args.max_rows):
+    if args.from_file:
+        with open(args.from_file, encoding="utf-8") as fh:
+            raw_rows = json.load(fh)
+        if isinstance(raw_rows, dict):
+            raw_rows = raw_rows.get("rows") or raw_rows.get("records") or []
+        if args.shift_dates_years:
+            def _shift(v):
+                # Bump the year of anything shaped YYYY-MM-DD. No regex, because
+                # this module deliberately does not import re.
+                if (isinstance(v, str) and len(v) >= 10
+                        and v[4] == "-" and v[7] == "-" and v[:4].isdigit()):
+                    return f"{int(v[:4]) + args.shift_dates_years}{v[4:]}"
+                return v
+            raw_rows = [{k: _shift(v) for k, v in row.items()}
+                        for row in raw_rows]
+        print(f"reading {len(raw_rows):,} raw rows from {args.from_file} "
+              f"(no network)")
+        source = raw_rows[:args.max_rows] if args.max_rows else raw_rows
+    else:
+        source = iter_all_rows(max_rows=args.max_rows)
+
+    for row in source:
         normalized.append(normalize(row))
 
     print(f"\nnormalized {len(normalized):,} rows in {time.time() - started:,.0f}s")
