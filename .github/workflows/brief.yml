@@ -1,6 +1,8 @@
 name: Weekly recompete brief
 
-# Produces the week's email as a downloadable artifact every Monday morning.
+# Produces the week's email as a downloadable artifact every Sunday evening, so
+# there is a real brief to read the night before it goes out, rather than one
+# that first exists an hour before you send it.
 # It does NOT send anything — at this list size you paste it into Kit yourself
 # and press send. That is deliberate: automated sending to a tiny list is a
 # deliverability risk, and you want eyes on the first few editions anyway.
@@ -10,7 +12,7 @@ name: Weekly recompete brief
 # workflow having run, and can never be built from an expired artifact.
 on:
   schedule:
-    - cron: "0 11 * * 1"      # Mondays 11:00 UTC (07:00 EDT / 06:00 EST)
+    - cron: "0 22 * * 0"      # Sundays 22:00 UTC (18:00 EDT / 17:00 EST)
   workflow_dispatch:
 
 # Separate concurrency group from the site build: these two jobs are unrelated
