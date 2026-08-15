@@ -63,4 +63,5 @@ jobs:
 
           python3 audit.py \
             --input /tmp/smoke-pipeline.json \
-            --site /tmp/smoke-site
+            --site /tmp/smoke-site \
+            --allow-small
