@@ -25,7 +25,9 @@ from collections import Counter, defaultdict
 # does not weaken the gate: the count checks below test that the site matches the
 # data, so the data has to carry the same transformation the site does. A leak
 # check is added further down to test the rule actually fired.
-import html
+# NB: this module already uses `html` as a local variable name, so the module
+# cannot be imported under that name. Bind the one function needed instead.
+from html import unescape as _unescape
 
 import build_site
 
@@ -178,7 +180,7 @@ def main() -> int:
             out += re.findall(r'<li><a href="[^"]+">([^<]+)</a>', src)
             out += [m.split("\u2014")[0].strip()
                     for m in re.findall(r'<li class="d">([^<]+)</li>', src)]
-        return [html.unescape(n) for n in out]
+        return [_unescape(n) for n in out]
 
     leaked = {n for n in _listed_incumbent_names() if build_site.is_individual(n)}
     check("no individual person is listed as an incumbent", not leaked,
