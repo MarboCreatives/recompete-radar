@@ -159,20 +159,38 @@ GOOGLE_VERIFICATION = ""
 FILENAMES: dict[str, dict[str, str]] = {"department": {}, "incumbent": {}, "category": {},
                                         "province": {}}
 
+# key -> "index-N.html#anchor" for groups BELOW the thin-content threshold.
+# Those groups have no page, but they are all listed on the folder index, so the
+# index row is the honest destination for a click on their name.
+ANCHORS: dict[str, dict[str, str]] = {"department": {}, "incumbent": {}, "category": {},
+                                      "province": {}}
+
+# Groups per index page. Used by both the anchor assignment and the index
+# writer; they MUST agree or a link lands on the wrong page.
+SMALL_PER_PAGE = 1000
+
 
 def entity_link(folder: str, key: Optional[str], text: str, depth: int) -> str:
-    """Link to an entity page, or plain text when no page exists.
+    """Link to an entity page, or to the entity's row on the folder index.
 
-    Groups below the thin-content threshold get no page of their own (they are
-    listed on the folder index instead), so a link is only emitted when the
-    filename map actually has an entry.
+    Groups below the thin-content threshold get no page of their own, so there
+    is nothing to link to directly. Returning bare text for those was correct
+    but read as broken: a reader sees a supplier name sitting in a table next to
+    a dozen linked ones and cannot tell whether the site is missing a page or
+    their click failed. Fragment links to the index row keep the thin-content
+    guard exactly as it was (no extra pages are generated) while giving every
+    name somewhere to go.
     """
     safe = esc(text)
-    fn = FILENAMES.get(folder, {}).get(key or "")
-    if not fn:
-        return safe
+    k = key or ""
+    fn = FILENAMES.get(folder, {}).get(k)
     prefix = "../" * depth
-    return f'<a href="{prefix}{folder}/{fn}">{safe}</a>'
+    if fn:
+        return f'<a href="{prefix}{folder}/{fn}">{safe}</a>'
+    target = ANCHORS.get(folder, {}).get(k)
+    if target:
+        return f'<a class="ix" href="{prefix}{folder}/{target}">{safe}</a>'
+    return safe
 
 
 def signup_pitch() -> str:
@@ -312,6 +330,13 @@ border:1px solid var(--ln);background:var(--bg);color:var(--tx);font-size:14px}
 color:#06121f;font-weight:600;font-size:14px;cursor:pointer;white-space:nowrap}
 .subf button:hover{filter:brightness(1.08)}
 .fine{color:var(--dm);font-size:11.5px;margin:0;line-height:1.55}
+/* Names with no page of their own link to their row on the folder index.
+   Dotted underline so it is honestly distinguishable from a link to a real
+   page, and :target flashes the row so the reader can see where they landed
+   in a list of a thousand. */
+a.ix{border-bottom:1px dotted #3d6f9e}
+li.d:target{background:#1d2836;outline:2px solid var(--ac);border-radius:5px;
+padding:2px 6px;color:var(--tx)}
 /* Second row, full width inside the flex form. Deliberately quieter than the
    primary row: smaller, dimmer text, so the eye still lands on the email box. */
 .subx{flex:1 1 100%;display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:2px}
@@ -809,9 +834,41 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
 
     # key -> actual filename written. Links MUST be built from this, never
     # recomputed from the display name, or collision-renamed pages get orphaned.
-    global FILENAMES
+    global FILENAMES, ANCHORS
     FILENAMES = {"department": {}, "incumbent": {}, "category": {}, "province": {}}
+    ANCHORS = {"department": {}, "incumbent": {}, "category": {}, "province": {}}
     filenames = FILENAMES
+
+    def small_pages(small: list) -> list[list]:
+        """Sort and paginate the below-threshold groups.
+
+        Called twice — once to assign anchor targets before any page is
+        rendered, once when the index is actually written. The ordering lives
+        here and nowhere else, because if the two callers ever disagreed every
+        fragment link would silently point at the wrong page.
+        """
+        s = sorted(small, key=lambda kv: -kv[1]["value"])
+        return [s[i:i + SMALL_PER_PAGE]
+                for i in range(0, len(s), SMALL_PER_PAGE)] or [[]]
+
+    def assign_anchors(small: list, folder: str) -> None:
+        """Give every thin group a stable id and record where it can be found.
+
+        Ids are slugged from the group key and de-duplicated within the folder;
+        two keys can slug identically, and a repeated id would send half the
+        links to the wrong row.
+        """
+        used: set[str] = set()
+        for n, chunk in enumerate(small_pages(small), start=1):
+            fn = "index.html" if n == 1 else f"index-{n}.html"
+            for key, _g in chunk:
+                base = slug(key)
+                anchor, i = base, 2
+                while anchor in used:
+                    anchor = f"{base}-{i}"
+                    i += 1
+                used.add(anchor)
+                ANCHORS[folder][key] = f"{fn}#{anchor}"
 
     def assign_filenames(groups: dict[str, dict], folder: str) -> list[tuple[str, dict]]:
         """Decide every page's filename BEFORE anything is rendered.
@@ -894,6 +951,14 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
     small_c = assign_filenames(cats, "category")
     small_p = assign_filenames(provs, "province")
 
+    # Anchors are assigned in pass 1 for the same reason filenames are: pages
+    # cross-link, so every destination has to be known before the first page is
+    # rendered.
+    assign_anchors(small_d, "department")
+    assign_anchors(small_v, "incumbent")
+    assign_anchors(small_c, "category")
+    assign_anchors(small_p, "province")
+
     # PASS 2 — render, now that cross-folder links can all be resolved.
     write_group_pages(depts, "department", "Department", ("cat",))
     write_group_pages(vendors, "incumbent", "Incumbent", ("dept", "cat"))
@@ -913,16 +978,18 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
             f'<span class="d">{money(g["value"])} · {g["count"]}</span></li>'
             for k, g in big if k in filenames[folder])
 
-        small_sorted = sorted(small, key=lambda kv: -kv[1]["value"])
-        PER = 1000
-        chunks = [small_sorted[i:i + PER] for i in range(0, len(small_sorted), PER)] or [[]]
+        chunks = small_pages(small)
         total_pages = len(chunks)
 
         for n, chunk in enumerate(chunks, start=1):
             fn = "index.html" if n == 1 else f"index-{n}.html"
+            # The id has to come from ANCHORS, not be recomputed here: the
+            # de-duplication happened once, during assignment, and recomputing
+            # it would risk drifting from the links already written.
             rest = "".join(
-                f'<li class="d">{esc(g["display"][:52])} — {money(g["value"])} · {g["count"]}</li>'
-                for _, g in chunk)
+                f'<li class="d" id="{esc(ANCHORS[folder].get(k, "#").split("#")[-1])}">'
+                f'{esc(g["display"][:52])} — {money(g["value"])} · {g["count"]}</li>'
+                for k, g in chunk)
             nav = ""
             if total_pages > 1:
                 parts = []
