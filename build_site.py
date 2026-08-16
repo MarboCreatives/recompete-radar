@@ -60,6 +60,71 @@ MIN_VALUE = 5_000_000
 SIGNUP_ACTION = ""
 SIGNUP_CATEGORIES: list[str] = []   # populated from the data in build()
 
+# Optional profile fields, posted as fields[<key>] alongside fields[category].
+#
+# These exist to make a subscriber describable. An email address on its own can
+# be counted but not characterised, and a list you cannot characterise is worth
+# close to nothing to a referral partner. The answers cannot be collected
+# retroactively without emailing strangers to ask what they do for a living, so
+# every signup that arrives before these ship is permanently unsegmented.
+#
+# Each list's first entry MUST have an empty value and MUST be the one the
+# browser preselects. A dropdown that opens on "Alberta" collects "Alberta" from
+# everyone who ignores it, and those people then cannot be told apart from actual
+# Albertans. A blank default records "no answer", which is true. A silent default
+# records a lie that looks like data.
+#
+# None of the three is `required`. Three mandatory questions between a stranger
+# and a free newsletter costs more subscribers than the answers are worth.
+#
+# The keys (role, bids_federal, province) must match the custom-field keys in the
+# mail provider EXACTLY. Kit accepts a POST containing unrecognised fields[...]
+# keys, returns success, and stores nothing — so a typo here produces a form that
+# passes every test except the one that matters. Create the fields in Kit first,
+# copy the keys it assigns, then verify with one real signup that the values
+# actually land on the subscriber record.
+SIGNUP_ROLE_OPTIONS: list[tuple[str, str]] = [
+    ("", "Your role (optional)"),
+    ("independent", "Independent contractor"),
+    ("owner", "Small business owner"),
+    ("consultant", "Consultant or professional services"),
+    ("bid_staff", "Bid or proposal staff"),
+    ("subcontractor", "Subcontractor to a prime"),
+    ("other", "Other"),
+]
+
+# "watching" is not padding. It catches journalists, researchers and competitors,
+# who would otherwise hide inside the other four answers and inflate any
+# engagement figure quoted to a sponsor. "not_yet" is the commercially valuable
+# one: someone who wants to bid and does not yet is exactly who a bid consultant
+# would pay to reach.
+SIGNUP_BIDS_OPTIONS: list[tuple[str, str]] = [
+    ("", "Do you bid federally? (optional)"),
+    ("regularly", "Regularly"),
+    ("occasionally", "Occasionally"),
+    ("not_yet", "Not yet, but want to"),
+    ("watching", "Just keeping an eye on it"),
+]
+
+# The subscriber's OWN province. Not the place of performance, and not the
+# supplier address the province pages are built from — three different things.
+SIGNUP_PROVINCE_OPTIONS: list[tuple[str, str]] = [
+    ("", "Your province (optional)"),
+    ("AB", "Alberta"),
+    ("BC", "British Columbia"),
+    ("MB", "Manitoba"),
+    ("NB", "New Brunswick"),
+    ("NL", "Newfoundland and Labrador"),
+    ("NS", "Nova Scotia"),
+    ("NT", "Northwest Territories"),
+    ("NU", "Nunavut"),
+    ("ON", "Ontario"),
+    ("PE", "Prince Edward Island"),
+    ("QC", "Quebec"),
+    ("SK", "Saskatchewan"),
+    ("YT", "Yukon"),
+]
+
 # CASL identification. The Electronic Commerce Protection Regulations require a
 # REQUEST for consent — not just the emails that follow — to set out the name of
 # the business seeking consent, a mailing address, a contact method, and a
@@ -131,16 +196,39 @@ def signup_pitch() -> str:
             f"Get the week's list by email, free.")
 
 
+def _select(name: str, label: str, options: list[tuple[str, str]]) -> str:
+    """One optional profile dropdown.
+
+    The first option carries an empty value and is emitted first, so it is what
+    the browser preselects: an unanswered question must record nothing rather
+    than silently recording whichever answer happened to sort first.
+    """
+    opts = "".join(f'<option value="{esc(v)}">{esc(t)}</option>' for v, t in options)
+    return (f'<select name="fields[{esc(name)}]" aria-label="{esc(label)}">'
+            f'{opts}</select>')
+
+
 def signup_block() -> str:
     """One email box, on every page. Feeds both revenue models:
     the address builds the newsletter list; the optional category field is what
     turns a subscriber into a routable referral lead. Consent is explicit and the
     referral intent is disclosed up front — PIPEDA applies, and burying it would
-    poison the only asset this product has, which is being trustworthy."""
+    poison the only asset this product has, which is being trustworthy.
+
+    The three profile dropdowns sit in a second, lighter row below the button.
+    Putting them in the primary row would have made a five-control wall in front
+    of an email box, and the email box is the only field that must be filled.
+    """
     if not SIGNUP_ACTION:
         return ""
     opts = "".join(f'<option value="{esc(c)}">{esc(c[:60])}</option>'
                    for c in SIGNUP_CATEGORIES)
+    profile = (
+        _select("role", "Your role", SIGNUP_ROLE_OPTIONS)
+        + _select("bids_federal", "Whether you bid on federal work",
+                  SIGNUP_BIDS_OPTIONS)
+        + _select("province", "Your province", SIGNUP_PROVINCE_OPTIONS)
+    )
     return f"""
 <section class="sub" id="brief">
   <h2>Weekly recompete brief</h2>
@@ -153,6 +241,10 @@ def signup_block() -> str:
       {opts}
     </select>
     <button type="submit">Get the brief</button>
+    <div class="subx">
+      <span class="fine">Optional, and it helps me make the brief useful to you.</span>
+      {profile}
+    </div>
   </form>
   <p class="fine">One email will arrive from <strong>{esc(CONFIRM_SENDER)}</strong>
   asking you to confirm. If it is not in your inbox, look in spam or promotions and
@@ -220,7 +312,13 @@ border:1px solid var(--ln);background:var(--bg);color:var(--tx);font-size:14px}
 color:#06121f;font-weight:600;font-size:14px;cursor:pointer;white-space:nowrap}
 .subf button:hover{filter:brightness(1.08)}
 .fine{color:var(--dm);font-size:11.5px;margin:0;line-height:1.55}
-@media(max-width:560px){.subf input,.subf select,.subf button{flex:1 1 100%}}
+/* Second row, full width inside the flex form. Deliberately quieter than the
+   primary row: smaller, dimmer text, so the eye still lands on the email box. */
+.subx{flex:1 1 100%;display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:2px}
+.subx .fine{flex:1 1 100%;margin-bottom:2px}
+.subf .subx select{flex:1 1 158px;padding:7px 9px;font-size:12.5px;color:var(--dm)}
+@media(max-width:560px){.subf input,.subf select,.subf button{flex:1 1 100%}
+.subf .subx select{flex:1 1 100%}}
 .tw{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 -4px;padding:0 4px}
 .tw table{min-width:560px}
 @media(max-width:560px){
