@@ -86,7 +86,7 @@ jobs:
             --base-url "${{ vars.SITE_URL }}" \
             --signup-action "https://app.kit.com/forms/9791323/subscriptions" \
             --business-name "Canadian Recompete Radar" \
-            --mailing-address "916 Pembroke St. W, Pembroke, Ontario K8A 5P8"
+            --mailing-address "PO Box 1184, Pembroke, Ontario K8A 6Y6"
 
       # THE SAFETY GATE. audit.py exits non-zero on any failure, which fails the
       # job, which means nothing deploys. A bad refresh cannot reach the public
