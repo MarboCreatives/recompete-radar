@@ -321,7 +321,7 @@ def main() -> int:
     ap.add_argument("--as-of", default="", help="YYYY-MM-DD; defaults to today")
     ap.add_argument("--business-name", default="Canadian Recompete Radar")
     ap.add_argument("--mailing-address",
-                    default="916 Pembroke St. W, Pembroke, Ontario K8A 5P8")
+                    default="PO Box 1184, Pembroke, Ontario K8A 6Y6")
     ap.add_argument("--site", default="https://marbocreatives.github.io/recompete-radar")
     ap.add_argument("--self-test", action="store_true")
     ap.add_argument("--question", default="",
