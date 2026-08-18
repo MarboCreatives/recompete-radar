@@ -185,8 +185,12 @@ def main() -> int:
                 continue
             src = open(os.path.join(d, f), encoding="utf-8").read()
             out += re.findall(r'<li><a href="[^"]+">([^<]+)</a>', src)
+            # [^>]* tolerates the anchor id that below-threshold rows carry.
+            # This must stay attribute-tolerant: a pattern that silently stops
+            # matching turns the most important check in this file into a
+            # guaranteed pass over an empty list.
             out += [m.split("\u2014")[0].strip()
-                    for m in re.findall(r'<li class="d">([^<]+)</li>', src)]
+                    for m in re.findall(r'<li class="d"[^>]*>([^<]+)</li>', src)]
         return [_unescape(n) for n in out]
 
     leaked = {n for n in _listed_incumbent_names() if build_site.is_individual(n)}
@@ -203,7 +207,7 @@ def main() -> int:
                 continue
             src = open(os.path.join(site, folder, f), encoding="utf-8").read()
             n += len(re.findall(r'<li><a href="[^"]+"', src))
-            n += len(re.findall(r'<li class="d">', src))
+            n += len(re.findall(r'<li class="d"[^>]*>', src))
         return n
     for folder, groups in (("department", depts), ("incumbent", vends), ("category", cats)):
         check(f"all {folder} groups listed on index pages",
