@@ -48,6 +48,16 @@ SITE = "Canadian Recompete Radar"
 TAG = ("Federal contracts coming up for renewal — who holds them, "
        "what they're worth, and how contested they were.")
 
+# Visitors read the site as a tender board and then wonder why nothing has a
+# "bid" button. Nothing here is open to bid: these are contracts already
+# awarded, listed by when they expire, so a supplier can approach the
+# department before the recompete rather than after the notice. The site never
+# said so anywhere, which made every other number on the page confusing.
+NOT_A_TENDER_BOARD = (
+    "These contracts are already awarded. Nothing here is open to bid today — "
+    "the point is to see a renewal coming while there is still time to talk to "
+    "the department. Open tenders are posted on CanadaBuys.")
+
 # Thin-content thresholds. A page is generated only if the group clears one.
 MIN_CONTRACTS = 3
 MIN_VALUE = 5_000_000
@@ -204,11 +214,16 @@ def signup_pitch() -> str:
     """
     if SIGNUP_CROSSING_N <= 0:
         return "Federal contracts approaching renewal, summarised weekly by email, free."
+    # The count is 1 often enough on a small slice to matter: this pitch sits on
+    # every page, so "1 federal contracts cross" was the most-printed of the
+    # agreement faults even though it is the least-linked.
     if SIGNUP_PER_WEEK >= 1:
-        lead = (f"Around <strong>{SIGNUP_PER_WEEK} federal contracts</strong> cross into the "
+        lead = (f"Around <strong>{count_noun(SIGNUP_PER_WEEK, 'federal contract')}</strong> "
+                f"{'crosses' if SIGNUP_PER_WEEK == 1 else 'cross'} into the "
                 f"12&#8209;month planning window every week")
     else:
-        lead = (f"<strong>{SIGNUP_CROSSING_N:,} federal contracts</strong> cross into the "
+        lead = (f"<strong>{count_noun(SIGNUP_CROSSING_N, 'federal contract')}</strong> "
+                f"{'crosses' if SIGNUP_CROSSING_N == 1 else 'cross'} into the "
                 f"12&#8209;month planning window over the coming year")
     return (f"{lead} — {money(SIGNUP_YEAR_VALUE)} of contract value a year. "
             f"Get the week's list by email, free.")
@@ -239,7 +254,7 @@ def signup_block() -> str:
     """
     if not SIGNUP_ACTION:
         return ""
-    opts = "".join(f'<option value="{esc(c)}">{esc(c[:60])}</option>'
+    opts = "".join(f'<option value="{esc(c)}">{esc(clip(c, 60))}</option>'
                    for c in SIGNUP_CATEGORIES)
     profile = (
         _select("role", "Your role", SIGNUP_ROLE_OPTIONS)
@@ -302,6 +317,17 @@ tr:hover td{background:#141821}
 /* Contract reference number: present for anyone who needs to quote it to a
    department, visually subordinate so it doesn't compete with the vendor name. */
 .ref{color:var(--dm);font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;opacity:.75}
+/* The buyer's own note on what the work is. Set below the incumbent name
+   because it describes the contract, not the supplier, and the incumbent
+   column is the only one wide enough to carry a sentence. */
+.scope{display:block;color:var(--tx);font-size:12px;opacity:.82;margin-top:3px;max-width:34em}
+/* The "not a tender board" line. Sits directly under the tagline on every
+   page, bordered so it reads as a statement of scope rather than blurb. */
+.nb{border-left:2px solid var(--ac);padding-left:9px;margin-top:7px;max-width:56em;font-size:13px}
+.flag{display:inline-block;font-size:10px;font-weight:600;letter-spacing:.04em;
+text-transform:uppercase;color:var(--dm);border:1px solid var(--ln);
+border-radius:4px;padding:1px 5px;margin-top:4px;margin-right:4px}
+.flag.no{color:var(--ht);border-color:rgba(255,107,107,.4)}
 td a{color:inherit;text-decoration:none;border-bottom:1px solid var(--ln)}
 td a:hover{color:var(--ac);border-bottom-color:var(--ac)}
 .p{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10.5px;font-weight:600}
@@ -406,6 +432,60 @@ def esc(v: Any) -> str:
     return html.escape(str(v)) if v is not None else ""
 
 
+# --------------------------------------------------------------------------
+# English surface text
+#
+# Every string a reader sees here is generated, never typed, so a proofreader
+# cannot find a fault in it. These three helpers exist because all three faults
+# below reached the live site and stayed there:
+#
+#   * `label.lower() + "s"` published "categorys" in an <h2>, a <title> and a
+#     meta description on /category/index.html.
+#   * `display[:52]` cut 250 distinct names mid-word with no ellipsis, and the
+#     [:60] variant put "...including semina" in the signup dropdown on all
+#     2,101 pages.
+#   * A fixed plural verb printed "1 federal contracts", "1 expire within 12
+#     months" and "1 were uncontested" across 660 meta descriptions.
+#
+# Meta descriptions are the text Google prints under the result, so these are
+# read by more people than any page body on the site.
+# --------------------------------------------------------------------------
+
+def plural(word: str) -> str:
+    """Plural of an index label. The four live labels are department,
+    incumbent, category and supplier province; the -y rule is the one that
+    matters and the others are here so a new label cannot reintroduce this."""
+    w = word or ""
+    if w.endswith("y") and (len(w) < 2 or w[-2].lower() not in "aeiou"):
+        return w[:-1] + "ies"
+    if w.endswith(("s", "x", "z", "ch", "sh")):
+        return w + "es"
+    return w + "s"
+
+
+def clip(text: str, limit: int) -> str:
+    """Shorten to `limit` characters on a word boundary, marking the cut.
+
+    A bare slice is what produced "...telecommunications consul". Falling back
+    to a hard cut when a single token is longer than the limit is deliberate:
+    some vendor names are one very long word, and returning them in full would
+    break the column the caller sized the limit for.
+    """
+    t = " ".join((text or "").split())
+    if len(t) <= limit:
+        return t
+    cut = t[:limit - 1].rstrip()
+    space = cut.rfind(" ")
+    if space >= limit // 2:
+        cut = cut[:space]
+    return cut.rstrip(" ,;:-–—/") + "…"
+
+
+def count_noun(n: int, singular: str, plural_form: Optional[str] = None) -> str:
+    """'1 contract' / '2 contracts', with the number group-separated."""
+    return f"{n:,} {singular if n == 1 else (plural_form or plural(singular))}"
+
+
 def bucket_pill(b: Optional[str]) -> str:
     cls = {"0-6mo": "hot", "6-12mo": "warn", "12-24mo": "good"}.get(b or "", "dim")
     return f'<span class="p {cls}">{esc(b or "—")}</span>'
@@ -482,6 +562,7 @@ def page(title: str, desc: str, body: str, depth: int = 0) -> str:
 <style>{CSS}</style></head><body><div class="w">
 <header><h1><a href="{root}index.html" style="color:inherit">{SITE}</a></h1>
 <p class="sb">{esc(TAG)}</p>
+<p class="sb nb">{esc(NOT_A_TENDER_BOARD)}</p>
 <nav class="nav" aria-label="Browse the dataset">
 <a href="{root}index.html">Expiring soonest</a>
 <a href="{root}category/index.html">Browse by category</a>
@@ -533,17 +614,36 @@ def contract_table(rows: list[dict], show: tuple[str, ...] = ("dept", "cat"),
         # reintroduces the mobile overflow the .tw wrapper exists to prevent.
         ref = c.get("reference_number")
         ref_html = f'<br><span class="ref">{esc(str(ref)[:34])}</span>' if ref else ""
+
+        # What the contract is actually for, when the buyer wrote it down and
+        # the text passes the name scan. This is the field readers asked for:
+        # the Category column alone is often "Other professional services not
+        # elsewhere specified", which tells them nothing.
+        scope = scope_text(c.get("comments_en"))
+        scope_html = f'<span class="scope">{esc(scope)}</span>' if scope else ""
+
+        # Both of these are already computed and have never been displayed.
+        # "You cannot bid on this one" is as useful to a small supplier as the
+        # opposite, and it is the difference between a lead and a wasted call.
+        flags = ""
+        if c.get("is_sole_sourced"):
+            flags += '<span class="flag no" title="Awarded without competition">Sole-sourced</span>'
+        if c.get("standing_offer_number"):
+            flags += ('<span class="flag" title="Called up against an existing '
+                      'standing offer, not tendered separately">Standing offer</span>')
+        flags_html = f"<br>{flags}" if flags else ""
         cells = [
             f'<td{sort_key(days)}>{bucket_pill(c.get("expiry_bucket"))} '
             f'<span class="d">{days}d</span></td>',
             f'<td class="n"{sort_key(c.get("contract_value"))}>{money(c.get("contract_value"))}</td>',
-            f'<td>{entity_link("incumbent", c.get("vendor_key"), (c.get("vendor_name") or "—")[:38], depth)}{ref_html}</td>',
+            f'<td>{entity_link("incumbent", c.get("vendor_key"), clip(c.get("vendor_name") or "—", 38), depth)}'
+            f'{ref_html}{flags_html}{scope_html}</td>',
         ]
         if "dept" in show:
-            dept_txt = (c.get("buyer_org") or "").split(" | ")[0][:38]
+            dept_txt = clip((c.get("buyer_org") or "").split(" | ")[0], 38)
             cells.append(f'<td class="d">{entity_link("department", c.get("buyer_org"), dept_txt, depth)}</td>')
         if "cat" in show:
-            cat_txt = (c.get("category_name") or c.get("commodity_code") or "")[:38]
+            cat_txt = clip(c.get("category_name") or c.get("commodity_code") or "", 38)
             cells.append(f'<td class="d">{entity_link("category", c.get("category_key"), cat_txt, depth)}</td>')
         cells.append(f'<td class="n d"{sort_key(bids)}>'
                      f'{bids if bids is not None else "—"}</td>')
@@ -842,6 +942,111 @@ def is_person_shaped(name: str) -> bool:
     return 2 <= len(toks) <= 3
 
 
+# --------------------------------------------------------------------------
+# Scope text
+#
+# comments_en is the buyer's own note on what the contract is for. It is the
+# single most useful field the source publishes and the site has never shown
+# it: description_en, which is shown instead, is only the commodity category
+# and is frequently "Other professional services not elsewhere specified".
+#
+# It is also the only free-text field on the site. A person typed it into a
+# government form, so it can contain a name, and hard rule 8 does not care
+# that the name arrived by an unusual route. Everything below exists to decide
+# whether one string is safe to print.
+# --------------------------------------------------------------------------
+
+_SCOPE_EMAIL = re.compile(r"[^\s@]+@[^\s@]+\.[A-Za-z]{2,}")
+_SCOPE_INITIAL = re.compile(r"\b[A-Z]\.\s*[A-Z][a-z]")          # "M. Tremblay"
+_SCOPE_CAPTOK = re.compile(r"\b[A-Z][A-Za-z']+\b")
+_SCOPE_COMMA = re.compile(r"\b([A-Z][a-z']{1,})\s*,\s*([A-Z][a-z']{1,})\b")
+
+# Place names keep "Ottawa, Ontario" and "Toronto, Ontario" from reading as
+# "Surname, Given". Without this the comma rule alone withholds site-visit and
+# office-fit-up scope text, which is a large slice of the construction records.
+PLACE_WORDS = frozenset("""
+ONTARIO QUEBEC ALBERTA MANITOBA SASKATCHEWAN NUNAVUT YUKON NOVA SCOTIA BRUNSWICK
+NEWFOUNDLAND LABRADOR COLUMBIA EDWARD ISLAND TERRITORIES NORTHWEST CANADA
+OTTAWA TORONTO MONTREAL VANCOUVER CALGARY EDMONTON WINNIPEG HALIFAX REGINA
+SASKATOON VICTORIA GATINEAU HAMILTON LONDON KINGSTON WINDSOR MISSISSAUGA
+BRAMPTON FREDERICTON CHARLOTTETOWN WHITEHORSE YELLOWKNIFE IQALUIT MONCTON
+STREET AVENUE ROAD BOULEVARD NORTH SOUTH EAST WEST
+""".split())
+
+
+def scope_text(comment: Optional[str], limit: int = 180) -> Optional[str]:
+    """The publishable scope note for a contract, or None to withhold it.
+
+    Withholding is all-or-nothing by choice. Redacting the matched token was
+    the alternative and it is worse twice over: a partial redaction that misses
+    a second name still exposes someone, and it puts a mangled sentence on a
+    public page. Dropping the whole string costs a reader one line of detail
+    and cannot half-fail.
+
+    The scan is deliberately not is_individual(). That function tests whether a
+    WHOLE string is a person's name; this one hunts a name inside a sentence,
+    which is a different problem — "Consulting services provided by John Smith"
+    is not a person-shaped string but it does name a person.
+
+    Measured against the 54 populated comments in the bundled fixture: zero
+    withheld. Against hand-written positives covering Anglo, French, South
+    Asian, Arabic and East Asian names in both orders, plus initials and an
+    email address: all withheld.
+    """
+    t = " ".join((comment or "").split())
+    if len(t) < 3:
+        return None
+    if _SCOPE_EMAIL.search(t) or _SCOPE_INITIAL.search(t):
+        return None
+
+    # "Nguyen, Thi" — surname-first, the form that carries no given name the
+    # word list would recognise. This is the rule that protects the names no
+    # list covers, which is most of them.
+    for m in _SCOPE_COMMA.finditer(t):
+        a, b = m.groups()
+        if a.upper() in CORP_WORDS or b.upper() in CORP_WORDS:
+            continue
+        if a.upper() in PLACE_WORDS or b.upper() in PLACE_WORDS:
+            continue
+        return None
+
+    # A known given name sitting next to another plain capitalised word.
+    # Adjacency is what stops "Bill C-69", "May 2026" and "Grant and
+    # Contribution Audit" from being withheld: the neighbour there is a
+    # number, a code or a CORP_WORD, never a surname.
+    toks = _SCOPE_CAPTOK.findall(t)
+    for i, tok in enumerate(toks):
+        if tok.lower() not in GIVEN_NAMES:
+            continue
+        for other in (toks[i + 1] if i + 1 < len(toks) else None,
+                      toks[i - 1] if i else None):
+            if not other or not other.isalpha() or len(other) < 2:
+                continue
+            if other.upper() in CORP_WORDS or other.upper() in PLACE_WORDS:
+                continue
+            return None
+
+    return clip(t, limit)
+
+
+def scope_stats(rows: list[dict]) -> tuple[int, int]:
+    """(published, withheld) for the build log. Counts only — never a string.
+
+    Same reason as suppress_individuals: the withheld text is the thing being
+    protected, and this log is public on a public repo.
+    """
+    published = withheld = 0
+    for r in rows:
+        raw = r.get("comments_en")
+        if not raw:
+            continue
+        if scope_text(raw):
+            published += 1
+        else:
+            withheld += 1
+    return published, withheld
+
+
 def suppress_individuals(rows: list[dict]) -> int:
     """Withhold the names of vendors who are private people.
 
@@ -1003,9 +1208,13 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
             # The entity name must lead the description. Without it, groups that
             # happen to share a count/value/soon triple produce byte-identical
             # descriptions — 474 of them across 2,092 pages in testing.
-            desc = (f"{g['display']}: {g['count']} federal contracts worth "
-                    f"{money(g['value'])} coming up for renewal. "
-                    f"{soon} expire within 12 months, {unc} were uncontested when "
+            # Singular counts are common here — 660 pages printed "1 federal
+            # contracts", "1 expire within 12 months" and "1 were uncontested".
+            # This string is the snippet Google prints under the result.
+            desc = (f"{g['display']}: {count_noun(g['count'], 'federal contract')} "
+                    f"worth {money(g['value'])} coming up for renewal. "
+                    f"{soon:,} {'expires' if soon == 1 else 'expire'} within 12 months, "
+                    f"{unc:,} {'was' if unc == 1 else 'were'} uncontested when "
                     f"last awarded. Incumbent, value, expiry and bidder count for each.")
             body = (
                 f'<div class="crumb"><a href="../index.html">Home</a> › '
@@ -1062,7 +1271,7 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
         big = sorted([(k, g) for k, g in groups.items() if substantial(g)],
                      key=lambda kv: -kv[1]["value"])
         links = "".join(
-            f'<li><a href="{filenames[folder][k]}">{esc(g["display"][:52])}</a> '
+            f'<li><a href="{filenames[folder][k]}">{esc(clip(g["display"], 52))}</a> '
             f'<span class="d">{money(g["value"])} · {g["count"]}</span></li>'
             for k, g in big if k in filenames[folder])
 
@@ -1077,7 +1286,7 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
             rest = "".join(
                 (f'<li class="d" id="{esc(ANCHORS[folder][k].split("#")[-1])}">'
                  if k in ANCHORS[folder] else '<li class="d">')
-                + f'{esc(g["display"][:52])} — {money(g["value"])} · {g["count"]}</li>'
+                + f'{esc(clip(g["display"], 52))} — {money(g["value"])} · {g["count"]}</li>'
                 for k, g in chunk)
             nav = ""
             if total_pages > 1:
@@ -1090,23 +1299,27 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
 
             head = (f'<div class="crumb"><a href="../index.html">Home</a> › {esc(label)}'
                     + (f" › page {n}" if n > 1 else "") + "</div>")
+            # plural(), not label + "s". "Category" is the label that breaks the
+            # naive form, and it broke in all five places at once.
+            many = plural(label.lower())
             body = head + (
-                f"<h2>All {label.lower()}s with contracts expiring</h2>"
-                + stat_cards([(f"{len(groups):,}", f"Total {label.lower()}s"),
+                f"<h2>All {many} with contracts expiring</h2>"
+                + stat_cards([(f"{len(groups):,}", f"Total {many}"),
                               (f"{len(big):,}", "With detail pages")], highlight=1)
                 + f"<ul>{links}</ul>" if n == 1 else
-                f"<h2>Smaller {label.lower()}s — page {n}</h2>")
+                f"<h2>Smaller {many} — page {n}</h2>")
             if rest:
-                body += (f"<h2>Smaller {label.lower()}s</h2>" if n == 1 else "")
+                body += (f"<h2>Smaller {many}</h2>" if n == 1 else "")
                 body += f"<ul class='cols3'>{rest}</ul>"
             body += nav
 
             suffix = "" if n == 1 else f" (page {n})"
             open(os.path.join(outdir, folder, fn), "w", encoding="utf-8").write(
-                page(f"All {label.lower()}s{suffix} | {SITE}",
+                page(f"All {many}{suffix} | {SITE}",
                      f"Every federal {label.lower()} with contracts coming up for "
                      f"renewal, ranked by total value{suffix}. "
-                     f"{len(groups):,} in total, {len(big):,} with detail pages.", body, 1))
+                     f"{len(groups):,} in total, "
+                     f"{len(big):,} with detail pages.", body, 1))
             urls.append(f"{folder}/{fn}")
 
     write_index(depts, small_d, "department", "Department")
@@ -1120,7 +1333,7 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
                       if substantial(g) and k in filenames[folder]],
                      key=lambda kv: -kv[1]["value"])[:n]
         return "".join(
-            f'<li><a href="{folder}/{filenames[folder][k]}">{esc(g["display"][:44])}</a>'
+            f'<li><a href="{folder}/{filenames[folder][k]}">{esc(clip(g["display"], 44))}</a>'
             f'<span class="n d">{money(g["value"])} · {g["count"]:,}</span></li>'
             for k, g in top)
 

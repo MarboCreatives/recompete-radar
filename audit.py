@@ -199,6 +199,101 @@ def main() -> int:
     check("individual vendor names are being withheld", withheld > 0,
           f"{withheld:,} withheld")
 
+    # ---- published scope text must carry no personal name ------------------
+    # comments_en is the only free-text field on the site: a person typed it
+    # into a government form, so it can contain anything. Never print a matched
+    # string here, for the same reason the withheld-names list is never
+    # printed — the text IS the personal information.
+    #
+    # This re-runs the scan against what actually reached disk rather than
+    # trusting build_site to have called it. A display path that forgets the
+    # scan is exactly the failure this gate exists to catch.
+    published_scope = []
+    for root, _dirs, files in os.walk(site):
+        for f in files:
+            if f.endswith(".html"):
+                published_scope += re.findall(
+                    r'<span class="scope">([^<]*)</span>',
+                    open(os.path.join(root, f), encoding="utf-8").read())
+    published_scope = [_unescape(s) for s in published_scope]
+    # clip() may have shortened the text before it was written, so compare on
+    # the scan verdict, not on string equality with the original.
+    unsafe = [s for s in published_scope if build_site.scope_text(s) is None]
+    check("no published scope text contains a personal name", not unsafe,
+          "" if not unsafe else f"{len(unsafe)} string(s) would not pass the scan")
+
+    scope_pub, scope_held = build_site.scope_stats(rows)
+    # A scan that withholds everything, or a display path that silently stopped
+    # rendering, both look like "no leaks" to the check above.
+    check("scope text is actually being published", scope_pub > 0,
+          f"{scope_pub:,} published, {scope_held:,} withheld")
+
+    # ---- generated English must be well formed ----------------------------
+    # Every reader-facing sentence here is built by a format string, so no
+    # amount of proofreading finds a fault in one. Three shipped and stayed
+    # live: "categorys" in a <title>, 250 names cut mid-word with no ellipsis,
+    # and "1 federal contracts" across 660 meta descriptions. Titles and meta
+    # descriptions are what Google prints under a result, so these are the
+    # most-read strings on the site and the least-reviewed. This check makes
+    # the class fail the build instead of waiting for someone to notice.
+    def _visible_text(path):
+        h = open(path, encoding="utf-8").read()
+        h = re.sub(r"<style.*?</style>", " ", h, flags=re.S)
+        h = re.sub(r"<script.*?</script>", " ", h, flags=re.S)
+        titles = re.findall(r"<title>(.*?)</title>", h, re.S)
+        descs = re.findall(r'<meta name="description" content="(.*?)"', h, re.S)
+        return _unescape(" ".join(titles + descs) + " " + re.sub(r"<[^>]+>", " ", h))
+
+    # \b1\b, not \d+, so "11 were" and "21 expire" do not read as faults.
+    BAD_AGREEMENT = re.compile(
+        r"\b1 (?:[a-z]+ )?(?:contracts|suppliers|incumbents|departments|categories"
+        r"|provinces|bids|pages|months|days|years|expire|cross|were|have|are)\b")
+    # -ys where -ies is correct. "categorys" is the live instance; the
+    # exclusions are the real English -ys words that reach these pages.
+    BAD_PLURAL = re.compile(
+        r"\b(?!always\b|keys\b|days\b|ways\b|guys\b|boys\b|toys\b|buys\b"
+        r"|surveys\b|delays\b|displays\b|says\b|plays\b|stays\b|holidays\b)"
+        r"[a-z]{4,}ys\b")
+
+    # Every name the site can display, so a fixed-width string can be tested
+    # for being a genuine prefix of a longer one rather than merely that long.
+    source_names = {str(r[k]) for r in rows
+                    for k in ("vendor_name", "category_name", "buyer_org")
+                    if r.get(k)}
+
+    agree, plur, midword = [], [], 0
+    for root, _dirs, files in os.walk(site):
+        for f in files:
+            if not f.endswith(".html"):
+                continue
+            p = os.path.join(root, f)
+            rel = os.path.relpath(p, site)
+            t = _visible_text(p)
+            if BAD_AGREEMENT.search(t):
+                agree.append(rel)
+            if BAD_PLURAL.search(t):
+                plur.append(rel)
+            src = open(p, encoding="utf-8").read()
+            # Anything clipped to a fixed width must end in the ellipsis that
+            # clip() adds. Length alone is not proof of a cut — one real
+            # category name is exactly 60 characters — so a string only counts
+            # as truncated when a LONGER source name starts with it.
+            for pat in (r'<a href="[^"]+">([^<]{52})</a>',
+                        r'<a href="[^"]+">([^<]{44})</a>',
+                        r'<option[^>]*>([^<]{60})</option>'):
+                for m in re.finditer(pat, src):
+                    s = _unescape(m.group(1))
+                    if s[-1:].isalpha() and any(
+                            len(nm) > len(s) and nm.startswith(s) for nm in source_names):
+                        midword += 1
+
+    check("no singular count takes a plural noun or verb", not agree,
+          "" if not agree else f"{len(agree)} page(s), e.g. {agree[0]}")
+    check("no -ys plural where -ies is correct", not plur,
+          "" if not plur else f"{len(plur)} page(s), e.g. {plur[0]}")
+    check("no display name is cut mid-word", midword == 0,
+          "" if not midword else f"{midword} cut without an ellipsis")
+
     # ---- every group must appear somewhere, not just the ones with pages ---
     def listed_count(folder):
         n = 0
