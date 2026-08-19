@@ -676,6 +676,22 @@ GOUVERNEMENT MINISTRY MINISTERE BOARD COUNCIL CONSEIL COMMISSION OFFICE BUREAU
 DEPARTMENT CITY VILLE TOWN MUNICIPALITY COUNTY REGION PROVINCE FIRST NATION NATIONS
 BAND TRIBAL HEALTH SANTE LAW AVOCATS NOTAIRES ARCHITECTS ARCHITECTES SURVEYORS
 ACCOUNTING ACCOUNTANTS CPA SONS BROS BROTHERS ENTERPRISE COOPERATIVE COOP
+MUSEUM MUSEE GALLERY GALERIE THEATRE ORCHESTRA CHOIR LIBRARY BIBLIOTHEQUE
+DEMENAGEMENT MOVING STORAGE ENTREPOSAGE WORKS WORKSHOP ATELIER COMPONENTS PARTS
+INDUSTRIAL INDUSTRIEL READY MIX CONCRETE ASPHALT PAVING AGGREGATE QUARRY
+TOOLS HARDWARE LUMBER TIMBER STEEL METALS WELDING FABRICATION MACHINE MACHINERY
+FARM ORCHARD GREENHOUSE NURSERY GARDEN LANDSCAPE FORESTRY LOGGING
+CATERING RESTAURANT CAFE BAKERY BREWERY DISTILLERY WINERY BISTRO CUISINE
+PHARMACY PHARMACIE DENTAL OPTICAL VETERINARY THERAPY REHAB WELLNESS FITNESS
+SALON SPA BARBER LAUNDRY JANITORIAL SANITATION DISPOSAL RECYCLING
+TOWING GARAGE COLLISION TIRE TIRES FUEL PETROLEUM PETRO GAS PROPANE
+SIGNS PRINTS GRAPHICS IMAGING PHOTO VIDEO FILMS PRODUCTIONS ENTERTAINMENT
+SPORTS ATHLETIC RECREATION ARENA STADIUM CLUB LODGE CAMP OUTFITTERS ADVENTURE
+AIRLINES AIRWAYS AIRPORT HELICOPTERS CHARTERS FREIGHT COURIER DELIVERY MOVERS
+VENTURES EQUITY FUND FUNDS INVESTMENTS ADVISORY ADVISORS BROKERAGE
+PLUS PRO EXPRESS DIRECT PRIME ELITE PREMIER SUPERIOR UNITED ALLIED ALLIANCE
+NORTHERN SOUTHERN EASTERN WESTERN ATLANTIC PACIFIC COMMISSIONNAIRES
+REGROUPEMENT CONCIERGERIE TOURISM AUTHORITY HTO AEC INDIGENOUS METIS INUIT
 """.split())
 
 # Common given names, used only for the weaker second rule below. Deliberately
@@ -702,6 +718,44 @@ brittany kayla alexis lori marie jeanne pascale olivier pierre jacques michel an
 francois luc marc claude gilles yves serge alain sylvain martin nathalie sylvie
 isabelle chantal manon lucie helene johanne josee guylaine genevieve veronique
 stephane mathieu simon etienne benoit denis jean-pierre marie-claude
+greg gregg tom tommy bob bobby dave davey mike mikey jim jimmy bill billy steve
+rob robbie dan danny tony ed eddie ted teddy sam sammy ben benny nick nicky
+chris matt andy joe joey pat ken kenny ron ronnie jamie rick ricky tim timmy
+jack jake jeff josh kate katie kathy liz beth maggie meg molly sally sue tina
+val vicky wendy cindy sandy jenny jess abby josie rosie cathy connie bonnie
+kirsten kirsty anders lars nils bjorn erik erika ingrid soren jorgen
+darcy declan cormac niamh siobhan aoife eamon padraig fergus rory brendan
+armand bertrand francine ghislain gaetan raynald normand fernand adrien
+lucien marcel gaston edouard hubert laurent thierry remi cedric fabrice andree
+sable roxanne shauna sheena kendra kelsey brooke paige sierra jenna leah
+miles milo malcolm murray magnus duncan angus lachlan ewan callum blair
+priya priyanka raj rajesh rajiv ravi ramesh suresh sunil anil vijay vikram amit
+sanjay deepak manish rahul arun ashok mohan krishna gopal hari shiv arjun karan
+rohit nikhil ajay akash aditya siddharth neha pooja anjali kavita meera geeta
+rekha shweta divya swati nisha ritu asha usha lata sunita anita seema veena
+subarno subrata sourav sanjeev pankaj gaurav abhishek prashant vivek naveen
+mohammed muhammad mohamed ahmed ahmad ali hassan hussein hussain omar khaled
+khalid tariq yasser samir karim rashid mahmoud mustafa ibrahim ismail youssef
+yusuf hamed hamid nasser fadi ziad bilal imad wael nabil adel hisham riad
+ghaida fatima fatema aisha ayesha layla leila noor nour huda mona rania dina
+yasmin yasmine amira hala samira nadia soraya farah rima maha lina zeinab asad
+soheil fariha wei ming jian jun feng lei tao hui ying mei jing ling
+seo hyun joon sung dong hae eun yong chul kyung soo woo chih
+hiroshi takashi kenji yuki akira satoshi taro naoko yumiko keiko kazuo noriko
+kwame kofi ama adwoa amara chidi ngozi olu ade tunde sipho thabo nkechi obi
+emeka chinwe uche ifeoma bongani lerato mandla zanele chukwuemeka mawusi dumenu
+vladimir dmitri dmitry sergei sergey ivan boris oleg nikolai alexei aleksei
+mikhail yuri anton pavel andrei andrey natasha olga svetlana tatiana irina
+ludmila katya anya galina nina larisa vera zoya pylypuk
+garen aram vartan hagop sarkis armen ani lusine anahit tigran levon
+anibal alberto jose carlos luis miguel rafael fernando ricardo eduardo
+alejandro javier sergio diego pablo gonzalo mateo santiago rodrigo ignacio
+isabella sofia camila valentina lucia elena rosa carmen pilar mercedes veronica
+dimitri dimitrios nikos yannis kostas stavros eleni vasilis christos
+minh thanh hoang tuan hung linh trang mai lan phuong quang duc binh
+ewa agnieszka malgorzata krzysztof wojciech grzegorz jacek marek piotr tomasz
+zoltan attila laszlo istvan gabor tibor csaba bela ferenc katalin erzsebet
+johanna madeleine bernadette suzanne tanya marlene violette taffot
 """.split())
 
 # Names listed here are never suppressed. This is the correction channel for a
@@ -758,6 +812,34 @@ def is_individual(name: str) -> bool:
         if any(t.lower() in GIVEN_NAMES for t in toks):
             return True
     return False
+
+
+def is_person_shaped(name: str) -> bool:
+    """Looser than is_individual: any name that COULD belong to a person.
+
+    Used for ONE thing — deciding whether a group may have a URL fragment.
+    is_individual decides what is published and is deliberately conservative,
+    because withholding a real company's name costs the reader something. An
+    anchor costs the reader nothing: without one the row still appears, with
+    its value and contract count, exactly as it did before anchors existed.
+
+    So the trade here is the opposite way round. A fragment is a permanent,
+    linkable, shareable pointer at one named party, which is what hard rule 8
+    exists to prevent. Being wrong in this direction costs a company an anchor.
+    Being wrong in the other direction puts a private person's name in a URL.
+
+    No given-name test on purpose. That test is what lets non-Anglo names
+    through, because no word list covers every given name on earth.
+    """
+    n = (name or "").strip()
+    if not n or any(ch.isdigit() for ch in n):
+        return False
+    toks = _name_tokens(n)
+    if not toks or any(t.upper() in CORP_WORDS for t in toks):
+        return False
+    if n.count(",") == 1:
+        return True
+    return 2 <= len(toks) <= 3
 
 
 def suppress_individuals(rows: list[dict]) -> int:
@@ -862,6 +944,12 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
         for n, chunk in enumerate(small_pages(small), start=1):
             fn = "index.html" if n == 1 else f"index-{n}.html"
             for key, _g in chunk:
+                # A name that could belong to a person gets no fragment. The row
+                # is still listed; entity_link() falls back to plain text, which
+                # is exactly how it behaved before anchors were introduced. See
+                # is_person_shaped for why the test is looser than suppression.
+                if is_person_shaped(_g.get("display", "")):
+                    continue
                 base = slug(key)
                 anchor, i = base, 2
                 while anchor in used:
@@ -987,8 +1075,9 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
             # de-duplication happened once, during assignment, and recomputing
             # it would risk drifting from the links already written.
             rest = "".join(
-                f'<li class="d" id="{esc(ANCHORS[folder].get(k, "#").split("#")[-1])}">'
-                f'{esc(g["display"][:52])} — {money(g["value"])} · {g["count"]}</li>'
+                (f'<li class="d" id="{esc(ANCHORS[folder][k].split("#")[-1])}">'
+                 if k in ANCHORS[folder] else '<li class="d">')
+                + f'{esc(g["display"][:52])} — {money(g["value"])} · {g["count"]}</li>'
                 for k, g in chunk)
             nav = ""
             if total_pages > 1:
