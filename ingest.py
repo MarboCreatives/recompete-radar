@@ -85,6 +85,20 @@ class Contract:
     description_en: Optional[str]
     description_fr: Optional[str]
 
+    # The buyer's own free-text note on what the contract is actually for, e.g.
+    # "Awareness Campaigns Video Production". Populated on roughly half of
+    # records and far more useful than description_en, which is only the
+    # commodity category and is often "Other professional services not
+    # elsewhere specified".
+    #
+    # It is free text a person typed, so unlike every other field here it can
+    # contain anything, including a name. It is collected because the reader
+    # needs it, but build_site.scope_text() decides what is publishable and
+    # audit.py gates the result. Contrast buyer_name above, which is not
+    # collected at all: that field is ALWAYS a person, so there is no version
+    # of it worth having. This one is usually a description of work.
+    comments_en: Optional[str]
+
     commodity_code: Optional[str]
     commodity_type: Optional[str]
     category_name: Optional[str]       # human-readable; derived after the full load
@@ -279,6 +293,7 @@ def normalize(row: dict, today: Optional[date] = None) -> Contract:
         # row["buyer_name"] is intentionally dropped here - see the Contract docstring.
         description_en=row.get("description_en") or None,
         description_fr=row.get("description_fr") or None,
+        comments_en=(row.get("comments_en") or "").strip() or None,
         commodity_code=row.get("commodity_code") or None,
         commodity_type=row.get("commodity_type") or None,
         category_name=None,   # filled by derive_category_names() after the full load
