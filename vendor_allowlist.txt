@@ -1,0 +1,18 @@
+# Vendors that must NEVER be treated as individual people.
+#
+# is_individual() is deliberately biased toward withholding: a false positive
+# costs a reader one company name, a missed suppression exposes a private
+# person. This file is how a real organisation gets its name back when a rule
+# reads it as a person.
+#
+# One name per line, exactly as it appears in vendor_name. Matching is on the
+# normalised form, so case and punctuation do not matter. A '#' starts a
+# comment. A missing file is fine — it just means nothing is allowlisted.
+#
+# Add a name here only after checking it really is an organisation. Every entry
+# is a deliberate decision to publish a name the rules wanted to withhold.
+
+# Accounting firm. Trips is_individual rule 3 because "raymond" is a given name
+# and none of "chabot", "grant" or "thornton" is a corporate word. Verified
+# against the live vendor list as the only false positive that rule produces.
+RAYMOND CHABOT GRANT THORNTON
