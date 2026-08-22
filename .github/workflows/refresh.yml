@@ -69,8 +69,48 @@ jobs:
       - name: Compile every module
         run: python3 -m py_compile ingest.py build_site.py audit.py brief.py
 
+      # The ingest downloads 1.3 million rows and takes about 14 minutes. The
+      # build that follows it takes 3 seconds. So a push that only changes how
+      # a page looks was paying 14 minutes to fetch data it did not need — and
+      # every failed attempt paid it again.
+      #
+      # The source dataset is published quarterly and this workflow polls it
+      # monthly on the 5th, so within one calendar month the data does not
+      # change. Cache the processed pipeline for the month and reuse it on
+      # pushes. Scheduled and manual runs always re-download, because those are
+      # the runs whose whole purpose is to refresh the data.
+      #
+      # The key includes a hash of ingest.py: that file decides the shape of
+      # the JSON, so a change to it must invalidate the cache. Without that,
+      # this very commit — which adds comments_en — would have built against a
+      # cached file that has no such field.
+      - name: Work out the dataset cache key
+        id: cachekey
+        run: echo "month=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
+
+      - name: Reuse this month's processed dataset if we have it
+        if: github.event_name == 'push'
+        id: pipeline-cache
+        uses: actions/cache@v4
+        with:
+          path: recompete_pipeline.json
+          key: pipeline-${{ steps.cachekey.outputs.month }}-${{ hashFiles('ingest.py') }}
+
       - name: Download and process contract data
+        if: github.event_name != 'push' || steps.pipeline-cache.outputs.cache-hit != 'true'
         run: python3 ingest.py --full --pipeline-out recompete_pipeline.json
+
+      # A cache hit means the audit's plausibility floors run against data that
+      # was verified on the run that produced it. Say so in the log, so a fast
+      # build is never mistaken for a skipped one.
+      - name: Report which dataset was used
+        run: |
+          if [ "${{ steps.pipeline-cache.outputs.cache-hit }}" = "true" ]; then
+            echo "Using cached dataset for ${{ steps.cachekey.outputs.month }}."
+          else
+            echo "Downloaded a fresh dataset."
+          fi
+          test -s recompete_pipeline.json
 
       # The signup form only renders if ALL of --signup-action, --business-name
       # and --mailing-address are supplied. That is deliberate: a form posting
