@@ -193,7 +193,39 @@ def main() -> int:
                     for m in re.findall(r'<li class="d"[^>]*>([^<]+)</li>', src)]
         return [_unescape(n) for n in out]
 
-    leaked = {n for n in _listed_incumbent_names() if build_site.is_individual(n)}
+    # Two corrections to what this check tests. Neither relaxes it — both stop
+    # it firing on a string the site does not actually hold.
+    #
+    # 1. Index pages clip long names to fit a column, so a displayed name may
+    #    end in an ellipsis. Clipping can cut off the very word that marks an
+    #    organisation: "CHRISTOPHER R. SKINNER MEDICINE PROFESSIONAL
+    #    CORPORATION" displays as "...MEDICINE PROFESSIONAL…", and without
+    #    CORPORATION that reads as a person. The question this check asks is
+    #    whether a person's NAME is published, so ask it of the name the site
+    #    holds, not of a visually shortened fragment of it. A genuinely
+    #    exposed person is unaffected: suppress_individuals runs on the full
+    #    name before anything is rendered, so a real individual never reaches
+    #    an index page to be clipped in the first place.
+    #
+    # 2. suppress_individuals skips names in VENDOR_ALLOWLIST. This check
+    #    already loads that list and then ignored it, so an allowlisted
+    #    organisation failed the audit for being published on purpose.
+    source_names = sorted({str(r["vendor_name"]) for r in rows if r.get("vendor_name")},
+                          key=len, reverse=True)
+
+    def _unclipped(displayed):
+        """The source name a displayed string came from, or the string itself."""
+        if not displayed.endswith("…"):
+            return displayed
+        stem = displayed.rstrip("…").strip()
+        for full in source_names:
+            if full.startswith(stem):
+                return full
+        return displayed
+
+    leaked = {n for n in map(_unclipped, _listed_incumbent_names())
+              if build_site.is_individual(n)
+              and build_site._norm_name(n) not in build_site.VENDOR_ALLOWLIST}
     check("no individual person is listed as an incumbent", not leaked,
           "" if not leaked else f"{len(leaked)} still listed")
     check("individual vendor names are being withheld", withheld > 0,
@@ -248,12 +280,23 @@ def main() -> int:
     BAD_AGREEMENT = re.compile(
         r"\b1 (?:[a-z]+ )?(?:contracts|suppliers|incumbents|departments|categories"
         r"|provinces|bids|pages|months|days|years|expire|cross|were|have|are)\b")
-    # -ys where -ies is correct. "categorys" is the live instance; the
-    # exclusions are the real English -ys words that reach these pages.
-    BAD_PLURAL = re.compile(
-        r"\b(?!always\b|keys\b|days\b|ways\b|guys\b|boys\b|toys\b|buys\b"
-        r"|surveys\b|delays\b|displays\b|says\b|plays\b|stays\b|holidays\b)"
-        r"[a-z]{4,}ys\b")
+    # -ys where -ies is correct. The first version of this scanned every word
+    # on the page and was wrong in principle: the pages carry 12,899 vendor
+    # names and 232 category names from the source data, so it fired on
+    # "maxsys" (a real supplier), "highways", "runways" and "journeys". No
+    # exclusion list can ever cover names nobody controls.
+    #
+    # Only the generator's own label plurals are in scope here. For each index
+    # label, if the naive label + "s" differs from plural(label), then seeing
+    # the naive form on a page means plural() was bypassed. That is exactly the
+    # "categorys" bug and nothing else can trip it.
+    BAD_PLURAL_FORMS = sorted({
+        lbl.lower() + "s"
+        for lbl in ("Department", "Incumbent", "Category", "Supplier province")
+        if lbl.lower() + "s" != build_site.plural(lbl.lower())
+    })
+    BAD_PLURAL = (re.compile(r"\b(" + "|".join(map(re.escape, BAD_PLURAL_FORMS)) + r")\b")
+                  if BAD_PLURAL_FORMS else None)
 
     # Every name the site can display, so a fixed-width string can be tested
     # for being a genuine prefix of a longer one rather than merely that long.
@@ -271,7 +314,7 @@ def main() -> int:
             t = _visible_text(p)
             if BAD_AGREEMENT.search(t):
                 agree.append(rel)
-            if BAD_PLURAL.search(t):
+            if BAD_PLURAL is not None and BAD_PLURAL.search(t):
                 plur.append(rel)
             src = open(p, encoding="utf-8").read()
             # Anything clipped to a fixed width must end in the ellipsis that

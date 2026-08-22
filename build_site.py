@@ -893,9 +893,24 @@ def is_individual(name: str) -> bool:
        without it, three surnames in a row read as a person.
     2. A two or three word name with no comma, containing a common given name.
        411 matches. Weaker, hence the allowlist.
+    3. A LONGER name that opens with a given name and carries no corporate word
+       anywhere. This is the sole trader who registered under their own name and
+       then described the work: "SVETLANA DAMNJANOVIC PREDUZETNIK KONSULTANTSKE
+       USLUGE", "DAVID LITTLE O/A PACIFICWIND POWERWASHING", "PIERRE JEAN OUELLET
+       R PSYCH". Rule 2's three-token ceiling misses every one of them, and the
+       trailing description is in whatever language the vendor registered in, so
+       CORP_WORDS will never cover it.
+
+       Measured against all 12,899 live vendor names: 32 additional matches, of
+       which 31 are natural people. The single false positive is the accounting
+       firm RAYMOND CHABOT GRANT THORNTON, which is in vendor_allowlist.txt.
+       That is the trade suppress_individuals already describes — withholding a
+       company name costs a reader one label, missing one exposes a person.
 
     A rule matching any 2-3 word name WITHOUT the given-name test was tried and
     rejected: it swept up 1,740 names including plain companies. Do not add it.
+    Rule 3 is NOT that rule: it keeps the given-name test and only relaxes the
+    length ceiling.
     """
     n = (name or "").strip()
     if not n or any(ch.isdigit() for ch in n):
@@ -911,6 +926,8 @@ def is_individual(name: str) -> bool:
     if "," not in n and 2 <= len(toks) <= 3:
         if any(t.lower() in GIVEN_NAMES for t in toks):
             return True
+    if len(toks) >= 4 and toks[0].lower() in GIVEN_NAMES:
+        return True
     return False
 
 
