@@ -160,6 +160,31 @@ SIGNUP_CROSSING_N = 0
 # <head> when set. See page() for why this is generated rather than a file.
 GOOGLE_VERIFICATION = ""
 
+# Absolute site root, e.g. "https://recompeteradar.ca". Set in build() from
+# --base-url and emitted as <link rel="canonical"> on every page. A module
+# global for the same reason GOOGLE_VERIFICATION is one: page() is called from
+# three places and threading the value through every caller buys nothing.
+BASE_URL = ""
+
+
+def declared_path(url: str) -> str:
+    """The ONE address a generated file is published at.
+
+    GitHub Pages serves foo/index.html at foo/ as well, so declaring the
+    index.html form splits a single page across two addresses that a search
+    engine sees as competing duplicates. Every internal link, the http-to-https
+    redirect and every human-typed link land on the directory form, so that is
+    the form this site declares.
+
+    The sitemap and the canonical tag BOTH go through this function, so they
+    cannot drift apart; there is only one rule and one place to change it.
+    """
+    if url == "index.html":
+        return ""
+    if url.endswith("/index.html"):
+        return url[:-len("index.html")]
+    return url
+
 # folder -> group key -> the filename actually written for that group.
 # Populated in build() BEFORE any page is rendered, because a department page
 # links to incumbent pages and vice versa; if this were filled in as pages were
@@ -547,7 +572,7 @@ def sort_key(value) -> str:
     return "" if value is None else f' data-s="{value}"'
 
 
-def page(title: str, desc: str, body: str, depth: int = 0) -> str:
+def page(title: str, desc: str, body: str, depth: int = 0, url: str = "") -> str:
     root = "../" * depth
     # Search Console verification is emitted by the generator, not dropped in as
     # a static file. The site directory is rebuilt from scratch every refresh,
@@ -555,10 +580,16 @@ def page(title: str, desc: str, body: str, depth: int = 0) -> str:
     # un-verify the property. A generated tag cannot be lost that way.
     gv = (f'\n<meta name="google-site-verification" content="{esc(GOOGLE_VERIFICATION)}">'
           if GOOGLE_VERIFICATION else "")
+    # One self-referencing canonical per page. Without it every page is reachable
+    # at more than one address (directory form vs index.html, and anything a
+    # linker appends), and the crawler splits its budget across the duplicates
+    # instead of indexing the ~2,100 pages that matter.
+    can = (f'\n<link rel="canonical" href="{BASE_URL}/{declared_path(url)}">'
+           if BASE_URL else "")
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{esc(title)}</title>
-<meta name="description" content="{esc(desc)}">{gv}
+<meta name="description" content="{esc(desc)}">{gv}{can}
 <style>{CSS}</style></head><body><div class="w">
 <header><h1><a href="{root}index.html" style="color:inherit">{SITE}</a></h1>
 <p class="sb">{esc(TAG)}</p>
@@ -1093,6 +1124,11 @@ def suppress_individuals(rows: list[dict]) -> int:
 # ------------------------------------------------------------------ build
 
 def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
+    # Set BEFORE any page is rendered. page() reads this global, so assigning it
+    # later would emit canonical-less pages and no error.
+    global BASE_URL
+    BASE_URL = (base_url or "").rstrip("/")
+
     for sub in ("department", "incumbent", "category", "province"):
         os.makedirs(os.path.join(outdir, sub), exist_ok=True)
 
@@ -1255,7 +1291,7 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
                    if folder == "province" else "")
                 + "<h2>Contracts by expiry</h2>"
                 + contract_table(g["items"], show=show, limit=400, depth=1))
-            open(path, "w", encoding="utf-8").write(page(title, desc, body, 1))
+            open(path, "w", encoding="utf-8").write(page(title, desc, body, 1, f"{folder}/{fn}"))
             urls.append(f"{folder}/{fn}")
             written[folder] += 1
 
@@ -1336,7 +1372,7 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
                      f"Every federal {label.lower()} with contracts coming up for "
                      f"renewal, ranked by total value{suffix}. "
                      f"{len(groups):,} in total, "
-                     f"{len(big):,} with detail pages.", body, 1))
+                     f"{len(big):,} with detail pages.", body, 1, f"{folder}/{fn}"))
             urls.append(f"{folder}/{fn}")
 
     write_index(depts, small_d, "department", "Department")
@@ -1402,7 +1438,7 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
         page(f"{SITE} — federal contracts up for renewal",
              f"{len(live):,} Canadian federal services contracts worth {money(total_value)} "
              f"are coming up for renewal. See the incumbent, value, expiry date and how "
-             f"contested each was.", body, 0))
+             f"contested each was.", body, 0, "index.html"))
 
     # ---- sitemap + robots
     # The sitemap protocol REQUIRES fully-qualified URLs. Relative paths are
@@ -1412,7 +1448,7 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
     today = date.today().isoformat()
     sm = ("<?xml version='1.0' encoding='UTF-8'?>\n"
           "<urlset xmlns='http://www.sitemaps.org/schemas/sitemap/0.9'>\n"
-          + "".join(f"  <url><loc>{base}/{u}</loc><lastmod>{today}</lastmod></url>\n"
+          + "".join(f"  <url><loc>{base}/{declared_path(u)}</loc><lastmod>{today}</lastmod></url>\n"
                     for u in sorted(set(urls))) + "</urlset>\n")
     open(os.path.join(outdir, "sitemap.xml"), "w", encoding="utf-8").write(sm)
 
@@ -1428,7 +1464,14 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
 
 
 def verify(outdir: str) -> list[str]:
-    """Check every internal link resolves to a file that exists."""
+    """Check every INTERNAL link resolves to a file that exists.
+
+    Absolute URLs are skipped. The canonical tag emits an absolute href ending
+    in .html, and treating that as a relative path reports every page as
+    linking to a broken file. The check has always been about internal links;
+    before the canonical tag existed there simply were no absolute ones to
+    exclude.
+    """
     problems = []
     for root, _dirs, files in os.walk(outdir):
         for f in files:
@@ -1436,7 +1479,7 @@ def verify(outdir: str) -> list[str]:
                 continue
             p = os.path.join(root, f)
             src = open(p, encoding="utf-8").read()
-            for href in re.findall(r'href="([^"#]+\.html)"', src):
+            for href in re.findall(r'href="(?!https?://)([^"#]+\.html)"', src):
                 target = os.path.normpath(os.path.join(root, href))
                 if not os.path.exists(target):
                     problems.append(f"{os.path.relpath(p,outdir)} -> {href}")
