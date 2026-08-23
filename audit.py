@@ -149,23 +149,88 @@ def main() -> int:
         # the most URLs actually resolve. If nothing resolves at any depth, the
         # sitemap is genuinely broken and the check below still fails.
         stripped = [re.sub(r"^https?://[^/]+/", "", u) for u in raw]
+
+        def _as_file_probe(u: str) -> str:
+            return (u + "index.html") if (u == "" or u.endswith("/")) else u
+
         best_depth, best_hits = 0, -1
         for depth in range(0, 3):
             cand = ["/".join(u.split("/")[depth:]) for u in stripped]
-            hits = sum(1 for u in cand if os.path.exists(os.path.join(site, u)))
+            # Count DISTINCT existing files, not raw hits. Past a URL's own depth
+            # every candidate collapses to "" and resolves to the site root, so a
+            # raw count scored the deepest slice highest and quietly disabled the
+            # dead-URL check below. One dead entry was enough to trigger it: it
+            # dropped depth 0's score by one and handed the win to the collapsed
+            # slice, so a broken sitemap audited clean. The real base path is the
+            # one under which the URLs map onto MANY different files.
+            hits = len({_as_file_probe(u) for u in cand
+                        if os.path.isfile(os.path.join(site, _as_file_probe(u)))})
             if hits > best_hits:
                 best_depth, best_hits = depth, hits
         if best_depth:
             print(f"  (sitemap served from a {best_depth}-segment base path: "
                   f"{'/'.join(stripped[0].split('/')[:best_depth])}/)")
         sm_urls = ["/".join(u.split("/")[best_depth:]) for u in stripped]
-    missing = [u for u in sm_urls if not os.path.exists(os.path.join(site, u))]
-    dupes = len(sm_urls) - len(set(sm_urls))
+    # A URL ending in "/", and the bare site root, are served out of index.html
+    # in that folder. Resolve to the file BEFORE testing existence. The old code
+    # tested os.path.exists on the URL as given, which for a directory-form URL
+    # answers "yes, the folder is there" even when the folder holds no
+    # index.html — a dead URL that reported as healthy.
+    def _as_file(u: str) -> str:
+        return (u + "index.html") if (u == "" or u.endswith("/")) else u
+
+    sm_files = [_as_file(u) for u in sm_urls]
+    missing = [u for u in sm_files if not os.path.isfile(os.path.join(site, u))]
+    dupes = len(sm_files) - len(set(sm_files))
     check("every sitemap URL resolves to a file", not missing,
           f"{len(missing)} dead entries" + (f" e.g. {missing[:3]}" if missing else ""))
     check("sitemap has no duplicate URLs", dupes == 0, f"{dupes} duplicates")
-    check("sitemap covers every page", len(set(sm_urls)) == len(html),
-          f"sitemap {len(set(sm_urls))} vs {len(html)} files")
+    check("sitemap covers every page", len(set(sm_files)) == len(html),
+          f"sitemap {len(set(sm_files))} vs {len(html)} files")
+
+    # ---- one canonical per page, agreeing with the sitemap ----------------
+    # Derived here from the sitemap and the filesystem, NOT by calling
+    # build_site's own URL helper. An audit that asks the code under test what
+    # the right answer is cannot detect that code being wrong; that is exactly
+    # how the is_individual check was blinded.
+    rel_html = sorted(os.path.relpath(f, site).replace(os.sep, "/") for f in html)
+    loc_for_file = dict(zip(sm_files, raw)) if sm_urls else {}
+
+    can_re = re.compile(r'<link\s+rel="canonical"\s+href="([^"]*)"\s*/?>', re.I)
+    canon_of, no_canon, many_canon = {}, [], []
+    for rel in rel_html:
+        found = can_re.findall(open(os.path.join(site, rel), encoding="utf-8").read())
+        if not found:
+            no_canon.append(rel)
+        elif len(found) > 1:
+            many_canon.append(rel)
+        else:
+            canon_of[rel] = found[0]
+
+    check("every page declares a canonical URL", not no_canon,
+          f"{len(no_canon)} of {len(rel_html)} pages have none"
+          + (f" e.g. {no_canon[:3]}" if no_canon else ""))
+    check("no page declares more than one canonical", not many_canon,
+          f"{len(many_canon)} pages" + (f" e.g. {many_canon[:3]}" if many_canon else ""))
+
+    rel_canon = sorted(r for r, u in canon_of.items()
+                       if not u.startswith(("http://", "https://")))
+    check("every canonical is an absolute URL", not rel_canon,
+          f"{len(rel_canon)} relative" + (f" e.g. {rel_canon[:3]}" if rel_canon else ""))
+
+    drift = sorted(r for r, u in canon_of.items()
+                   if r in loc_for_file and loc_for_file[r] != u)
+    check("canonical matches the sitemap entry for the same page", not drift,
+          f"{len(drift)} disagree" + (f" e.g. {drift[:2]}" if drift else ""))
+
+    seen, shared = {}, []
+    for r, u in sorted(canon_of.items()):
+        if u in seen:
+            shared.append(f"{seen[u]} + {r}")
+        else:
+            seen[u] = r
+    check("no two pages claim the same canonical", not shared,
+          f"{len(shared)} collisions" + (f" e.g. {shared[:2]}" if shared else ""))
 
     # ---- robots.txt must exist and point at the sitemap -------------------
     rb = os.path.join(site, "robots.txt")
@@ -356,7 +421,7 @@ def main() -> int:
     broken = []
     for p in html:
         src = open(p, encoding="utf-8").read()
-        for href in re.findall(r'href="([^"#]+\.html)"', src):
+        for href in re.findall(r'href="(?!https?://)([^"#]+\.html)"', src):
             if not os.path.exists(os.path.normpath(os.path.join(os.path.dirname(p), href))):
                 broken.append(f"{os.path.relpath(p, site)} -> {href}")
     check("no broken internal links", not broken, f"{len(broken)} broken")
@@ -368,7 +433,7 @@ def main() -> int:
     linked: set[str] = set()
     for p in html:
         src = open(p, encoding="utf-8").read()
-        for href in re.findall(r'href="([^"#]+\.html)"', src):
+        for href in re.findall(r'href="(?!https?://)([^"#]+\.html)"', src):
             t = os.path.normpath(os.path.join(os.path.dirname(p), href))
             linked.add(os.path.relpath(t, site).replace(os.sep, "/"))
     all_pages = {os.path.relpath(p, site).replace(os.sep, "/") for p in html}
