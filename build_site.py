@@ -58,6 +58,18 @@ NOT_A_TENDER_BOARD = (
     "the point is to see a renewal coming while there is still time to talk to "
     "the department. Open tenders are posted on CanadaBuys.")
 
+# Raised by a retired federal procurement officer, Aug 2026, and it is the
+# single most important limit on how these dates should be read. A contract is
+# often a short base period plus option years. The disclosure data publishes
+# only the period actually committed to, so an option exercised later simply
+# moves the end date and nothing announces it in advance. Read the date as a
+# floor, never as a promise.
+OPTION_YEARS = (
+    "Expiry dates show the period a department has committed to. Many contracts "
+    "carry option years that are not published until they are exercised, so treat "
+    "a date here as the earliest a contract could come back, not a guarantee "
+    "that it will.")
+
 # Thin-content thresholds. A page is generated only if the group clears one.
 MIN_CONTRACTS = 3
 MIN_VALUE = 5_000_000
@@ -594,6 +606,7 @@ def page(title: str, desc: str, body: str, depth: int = 0, url: str = "") -> str
 <header><h1><a href="{root}index.html" style="color:inherit">{SITE}</a></h1>
 <p class="sb">{esc(TAG)}</p>
 <p class="sb nb">{esc(NOT_A_TENDER_BOARD)}</p>
+<p class="sb">{esc(OPTION_YEARS)}</p>
 <nav class="nav" aria-label="Browse the dataset">
 <a href="{root}index.html">Expiring soonest</a>
 <a href="{root}category/index.html">Browse by category</a>

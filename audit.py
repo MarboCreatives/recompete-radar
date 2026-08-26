@@ -232,6 +232,18 @@ def main() -> int:
     check("no two pages claim the same canonical", not shared,
           f"{len(shared)} collisions" + (f" e.g. {shared[:2]}" if shared else ""))
 
+    # ---- the option-year caveat must appear on every page -----------------
+    # This sentence was promised publicly after a retired procurement officer
+    # pointed out that option years are invisible until exercised. Without it
+    # the site overstates how many contracts genuinely come back to market, so
+    # it is gated rather than left to survive on good intentions.
+    _oy = build_site.OPTION_YEARS.split(".")[0]
+    missing_oy = [os.path.relpath(f, site).replace(os.sep, "/") for f in html
+                  if _oy not in _unescape(open(f, encoding="utf-8").read())]
+    check("option-year caveat appears on every page", not missing_oy,
+          f"{len(missing_oy)} of {len(html)} pages missing it"
+          + (f" e.g. {missing_oy[:3]}" if missing_oy else ""))
+
     # ---- robots.txt must exist and point at the sitemap -------------------
     rb = os.path.join(site, "robots.txt")
     rb_txt = open(rb, encoding="utf-8").read() if os.path.exists(rb) else ""
