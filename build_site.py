@@ -64,6 +64,26 @@ NOT_A_TENDER_BOARD = (
 # only the period actually committed to, so an option exercised later simply
 # moves the end date and nothing announces it in advance. Read the date as a
 # floor, never as a promise.
+# Solicitation procedure codes from the source data. TN and AC are awards that
+# were never opened to competition at all, so a bid count of one is the definition
+# of the procedure rather than a finding about it. Quoting them alongside genuine
+# competitions inflates the single-bid share; raised by a procurement veteran on
+# Reddit, Aug 2026, and he was right. Anything not in either set is counted in
+# neither, so an unknown future code is excluded rather than silently miscounted.
+# Directory badge, HOME PAGE ONLY. Maidensail hands out a dofollow link in
+# exchange for the embed, which is a reciprocal link arrangement. One link from
+# the home page is a small bet; the same link on all 2,099 pages would be a
+# sitewide reciprocal footprint, which is exactly the pattern search engines
+# discount. width and height are set so the external image cannot shift the
+# layout while it loads, and it is lazy so it never blocks first paint.
+MAIDENSAIL_BADGE = (
+    '<br><a href="https://maidensail.com/startup/canadian-recompete-radar" rel="dofollow">'
+    '<img src="https://maidensail.com/badge/canadian-recompete-radar.svg?theme=dark" '
+    'alt="Featured on Maidensail" width="190" height="44" loading="lazy"></a>')
+
+COMPETITIVE_PROCEDURES = {"TC", "OB", "ST"}      # traditional competitive, open bidding, selective tendering
+NONCOMPETITIVE_PROCEDURES = {"TN", "AC"}         # traditional non-competitive, ACAN
+
 OPTION_YEARS = (
     "Expiry dates show the period a department has committed to. Many contracts "
     "carry option years that are not published until they are exercised, so treat "
@@ -598,6 +618,7 @@ def page(title: str, desc: str, body: str, depth: int = 0, url: str = "") -> str
     # instead of indexing the ~2,100 pages that matter.
     can = (f'\n<link rel="canonical" href="{BASE_URL}/{declared_path(url)}">'
            if BASE_URL else "")
+    badge = MAIDENSAIL_BADGE if url == "index.html" else ""
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{esc(title)}</title>
@@ -623,7 +644,7 @@ Figures are <strong>total contract value over the full contract term</strong>, n
 spend. Only services and construction contracts are shown, where the published
 "Contract Period End Date or Delivery Date" field is defined as the end of the
 performance period. Published quarterly, so the most recent quarter may not appear.
-Not affiliated with the Government of Canada.</footer>
+Not affiliated with the Government of Canada.{badge}</footer>
 </div>{SORT_JS}</body></html>"""
 
 
@@ -1412,6 +1433,15 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
     with_bids = sum(1 for r in live if r.get("number_of_bids") is not None)
     uncontested = sum(1 for r in live if r.get("competition_density") == "uncontested")
 
+    # Split the bid count by whether the award was actually competed. Derived, never
+    # hardcoded, for the same reason the signup figures are.
+    _bidded = [r for r in live if r.get("number_of_bids") is not None]
+    comp_rows = [r for r in _bidded if r.get("solicitation_procedure") in COMPETITIVE_PROCEDURES]
+    comp_total = len(comp_rows)
+    comp_uncontested = sum(1 for r in comp_rows if (r.get("number_of_bids") or 0) <= 1)
+    noncomp_total = sum(1 for r in _bidded
+                        if r.get("solicitation_procedure") in NONCOMPETITIVE_PROCEDURES)
+
     # Browse controls used to sit at the foot of this page. Two users asked for
     # filtering that already existed because they never scrolled that far, so the
     # grid is now built here and placed above the 60-row table.
@@ -1441,9 +1471,12 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
         # is accuracy. Replaced with facts we can defend from our own data.
         + "<h2>Expiring soonest</h2>"
         + f'<p class="sb">Agencies typically begin recompete planning 12–18 months '
-          f'before a contract ends. Of the {with_bids:,} contracts here that report a '
-          f'bidder count, <strong>{uncontested:,} ({uncontested/max(with_bids,1)*100:.0f}%) '
-          f'drew one bid or none</strong> when last awarded. The median contract is '
+          f'before a contract ends. Of the {comp_total:,} contracts here that were '
+          f'openly competed and report a bidder count, <strong>{comp_uncontested:,} '
+          f'({comp_uncontested/max(comp_total,1)*100:.0f}%) drew one bid or none</strong> '
+          f'when last awarded. A further {noncomp_total:,} were never competed at all, '
+          f'being non-competitive awards or advance contract award notices, so those '
+          f'are counted separately. The median contract is '
           f'{money(median_value)}; the largest {min(100, len(live))} account for '
           f'{top100_share:.0f}% of total value.</p>'
         + contract_table(live, limit=60))
