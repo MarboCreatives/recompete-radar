@@ -484,6 +484,26 @@ def main() -> int:
         check(f"landing page value within {tol:.1%} of data",
               abs(pv - total_value) / total_value < tol if total_value else False,
               f"page {pv:,.0f} vs data {total_value:,.0f}")
+        # The single-bid claim is the most quotable sentence on the site and it was
+        # publicly wrong once, counting never-competed awards as if they were
+        # competitions. Gate both halves against the data, computed here from the
+        # procedure codes rather than from build_site's own split.
+        bidded = [r for r in live if r.get("number_of_bids") is not None]
+        comp = [r for r in bidded if r.get("solicitation_procedure") in ("TC", "OB", "ST")]
+        exp_comp_unc = sum(1 for r in comp if (r.get("number_of_bids") or 0) <= 1)
+        exp_noncomp = sum(1 for r in bidded
+                          if r.get("solicitation_procedure") in ("TN", "AC"))
+        mb = re.search(r"Of the ([\d,]+) contracts here that were openly competed and "
+                       r"report a bidder count, <strong>([\d,]+) \(", src)
+        mn = re.search(r"A further ([\d,]+) were never competed at all", src)
+        got = (int(mb.group(1).replace(",", "")), int(mb.group(2).replace(",", ""))) if mb else None
+        check("landing page competed-contract figures match data",
+              got == (len(comp), exp_comp_unc),
+              f"page {got} vs data {(len(comp), exp_comp_unc)}")
+        gotn = int(mn.group(1).replace(",", "")) if mn else None
+        check("landing page never-competed count matches data",
+              gotn == exp_noncomp, f"page {gotn} vs data {exp_noncomp}")
+
         for b in ("0-6mo", "6-12mo", "12-24mo", "24mo+"):
             want = sum(1 for r in live if r.get("expiry_bucket") == b)
             got = m.get(b, "").replace(",", "")
