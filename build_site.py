@@ -84,6 +84,8 @@ MAIDENSAIL_BADGE = (
 COMPETITIVE_PROCEDURES = {"TC", "OB", "ST"}      # traditional competitive, open bidding, selective tendering
 NONCOMPETITIVE_PROCEDURES = {"TN", "AC"}         # traditional non-competitive, ACAN
 
+EYEBROW = "Government of Canada contract data"
+
 OPTION_YEARS = (
     "Expiry dates show the period a department has committed to. Many contracts "
     "carry option years that are not published until they are exercised, so treat "
@@ -298,6 +300,20 @@ def _select(name: str, label: str, options: list[tuple[str, str]]) -> str:
             f'{opts}</select>')
 
 
+def signup_cta() -> str:
+    """One line in the header pointing at the form further down the page.
+
+    The form used to sit directly under the header on every page, which put five
+    controls in front of the data. Moving it below the content risked the
+    signups, so the pitch stays up top as a single line and jumps to the form.
+    """
+    if not SIGNUP_ACTION:
+        return ""
+    pitch = signup_pitch().replace(" Get the week\'s list by email, free.", "")
+    return (f'<p class="sb">{pitch} '
+            f'<a href="#brief"><strong>Get the free weekly brief &rarr;</strong></a></p>')
+
+
 def signup_block() -> str:
     """One email box, on every page. Feeds both revenue models:
     the address builds the newsletter list; the optional category field is what
@@ -351,19 +367,28 @@ CSS = """
 :root{--bg:#0f1115;--pn:#171a21;--ln:#252a34;--tx:#e6e9ef;--dm:#98a1b3;
 --ac:#4da3ff;--wn:#ffb454;--ht:#ff6b6b;--ok:#5ecb8b}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);
-font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,sans-serif}
+font:15.5px/1.62 'Inter',ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,sans-serif}
 a{color:var(--ac);text-decoration:none}a:hover{text-decoration:underline}
 .w{max-width:1160px;margin:0 auto;padding:28px 20px 70px}
-header{border-bottom:1px solid var(--ln);padding-bottom:15px;margin-bottom:20px}
-h1{margin:0 0 5px;font-size:26px;letter-spacing:-.02em}
-h2{font-size:18px;margin:30px 0 10px}
+header{border-bottom:1px solid var(--ln);padding-bottom:20px;margin-bottom:26px}
+h1{margin:0 0 10px;font-size:36px;font-weight:800;letter-spacing:-.028em;line-height:1.05}
+h2{font-size:21px;font-weight:700;letter-spacing:-.018em;margin:38px 0 12px}
 .sb{color:var(--dm);font-size:14px;margin:0}
 .crumb{font-size:12.5px;color:var(--dm);margin-bottom:12px}
 .cd{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:11px;margin:16px 0}
 .c{background:var(--pn);border:1px solid var(--ln);border-radius:10px;padding:13px 15px}
 .c.b{border-color:#2f6ea8}
-.c .v{font-size:22px;font-weight:600;letter-spacing:-.02em}
-.c .l{color:var(--dm);font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-top:3px}
+.c .v{font-size:27px;font-weight:700;letter-spacing:-.025em;font-variant-numeric:tabular-nums}
+.c .l{color:var(--dm);font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.10em;margin-top:3px}
+/* Eyebrow, notes panel and the header call to action. Added Aug 2026 after two
+   people on X independently said the page felt sterile and that too much sat in
+   front of the data. */
+.eyebrow{font-family:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+ font-size:12px;font-weight:500;letter-spacing:.18em;text-transform:uppercase;color:var(--ac);margin:0 0 12px}
+header p.sb{max-width:66ch;font-size:16px;line-height:1.55}
+.notes{border:1px solid var(--ln);border-radius:12px;background:var(--pn);padding:16px 18px;margin:24px 0 8px}
+.notes p{margin:0 0 9px;max-width:78ch}
+.notes p:last-child{margin-bottom:0}
 table{width:100%;border-collapse:collapse;font-size:13.5px}
 th{text-align:left;color:var(--dm);font-weight:500;font-size:11px;text-transform:uppercase;
 letter-spacing:.06em;padding:8px;border-bottom:1px solid var(--ln)}
@@ -604,7 +629,8 @@ def sort_key(value) -> str:
     return "" if value is None else f' data-s="{value}"'
 
 
-def page(title: str, desc: str, body: str, depth: int = 0, url: str = "") -> str:
+def page(title: str, desc: str, body: str, depth: int = 0, url: str = "",
+         extra_notes: str = "") -> str:
     root = "../" * depth
     # Search Console verification is emitted by the generator, not dropped in as
     # a static file. The site directory is rebuilt from scratch every refresh,
@@ -623,11 +649,14 @@ def page(title: str, desc: str, body: str, depth: int = 0, url: str = "") -> str
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{esc(title)}</title>
 <meta name="description" content="{esc(desc)}">{gv}{can}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
 <style>{CSS}</style></head><body><div class="w">
-<header><h1><a href="{root}index.html" style="color:inherit">{SITE}</a></h1>
+<header><p class="eyebrow">{esc(EYEBROW)}</p>
+<h1><a href="{root}index.html" style="color:inherit">{SITE}</a></h1>
 <p class="sb">{esc(TAG)}</p>
-<p class="sb nb">{esc(NOT_A_TENDER_BOARD)}</p>
-<p class="sb">{esc(OPTION_YEARS)}</p>
+{signup_cta()}
 <nav class="nav" aria-label="Browse the dataset">
 <a href="{root}index.html">Expiring soonest</a>
 <a href="{root}category/index.html">Browse by category</a>
@@ -635,8 +664,10 @@ def page(title: str, desc: str, body: str, depth: int = 0, url: str = "") -> str
 <a href="{root}incumbent/index.html">Browse by incumbent</a>
 <a href="{root}province/index.html">Browse by supplier province</a>
 </nav></header>
-{signup_block()}
 {body}
+<div class="notes"><p class="nb">{esc(NOT_A_TENDER_BOARD)}</p>
+<p>{esc(OPTION_YEARS)}</p>{extra_notes}</div>
+{signup_block()}
 <footer>Built from the Government of Canada <strong>Proactive Publication of Contracts</strong>
 dataset (contracts over $10,000), Treasury Board of Canada Secretariat.
 Open Government Licence – Canada.<br>
@@ -1455,36 +1486,44 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
           f'<p><a href="category/index.html">All categories →</a></p></div>'
         + "</div>")
 
+    # Every figure in this note is computed from the dataset on this page. It
+    # previously cited a 70-80% incumbent win rate taken from a US vendor's
+    # marketing, a foreign statistic, unattributed, on a site whose whole value is
+    # accuracy. Replaced with facts we can defend from our own data.
+    #
+    # It sits BELOW the table rather than in front of it. Two people on X said
+    # independently that the page buried its own data under explanation, and they
+    # were right: 840 words stood between the top of the page and the first row.
+    stats_note = (
+        f'<p>Of the {comp_total:,} contracts here that were openly competed and '
+        f'report a bidder count, <strong>{comp_uncontested:,} '
+        f'({comp_uncontested/max(comp_total,1)*100:.0f}%) drew one bid or none</strong> '
+        f'when last awarded. A further {noncomp_total:,} were never competed at all, '
+        f'being non-competitive awards or advance contract award notices, so those '
+        f'are counted separately. The median contract is '
+        f'{money(median_value)}; the largest {min(100, len(live))} account for '
+        f'{top100_share:.0f}% of total value.</p>')
+
     body = (
         stat_cards([(f"{len(live):,}", "Live contracts"), (money(total_value), "Pipeline value")]
                    + [(f"{counts[b]:,}", b) for b in ("0-6mo", "6-12mo", "12-24mo", "24mo+")]
                    + [(money(median_value), "Median contract")])
+        # The data first. One line of orientation, then the rows.
+        + "<h2>Expiring soonest</h2>"
+        + '<p class="sb">Agencies typically begin recompete planning 12&#8211;18 months '
+          'before a contract ends.</p>'
+        + contract_table(live, limit=60)
         + "<h2>Browse by department, incumbent or category</h2>"
         + browse_grid
         + "<h2>By supplier province</h2>"
         + '<p class="sb">Where the incumbent is based, read from the postal code in '
           'the published record. Not where the work is performed.</p>'
-        + f'<ul class="cols3">{toplist(provs, "province", 12)}</ul>'
-        # Every figure in this paragraph is computed from the dataset on this page.
-        # It previously cited a 70-80% incumbent win rate taken from a US vendor's
-        # marketing — a foreign statistic, unattributed, on a site whose whole value
-        # is accuracy. Replaced with facts we can defend from our own data.
-        + "<h2>Expiring soonest</h2>"
-        + f'<p class="sb">Agencies typically begin recompete planning 12–18 months '
-          f'before a contract ends. Of the {comp_total:,} contracts here that were '
-          f'openly competed and report a bidder count, <strong>{comp_uncontested:,} '
-          f'({comp_uncontested/max(comp_total,1)*100:.0f}%) drew one bid or none</strong> '
-          f'when last awarded. A further {noncomp_total:,} were never competed at all, '
-          f'being non-competitive awards or advance contract award notices, so those '
-          f'are counted separately. The median contract is '
-          f'{money(median_value)}; the largest {min(100, len(live))} account for '
-          f'{top100_share:.0f}% of total value.</p>'
-        + contract_table(live, limit=60))
+        + f'<ul class="cols3">{toplist(provs, "province", 12)}</ul>')
     open(os.path.join(outdir, "index.html"), "w", encoding="utf-8").write(
         page(f"{SITE} — federal contracts up for renewal",
              f"{len(live):,} Canadian federal services contracts worth {money(total_value)} "
              f"are coming up for renewal. See the incumbent, value, expiry date and how "
-             f"contested each was.", body, 0, "index.html"))
+             f"contested each was.", body, 0, "index.html", stats_note))
 
     # ---- sitemap + robots
     # The sitemap protocol REQUIRES fully-qualified URLs. Relative paths are
