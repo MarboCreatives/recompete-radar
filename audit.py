@@ -244,6 +244,19 @@ def main() -> int:
           f"{len(missing_oy)} of {len(html)} pages missing it"
           + (f" e.g. {missing_oy[:3]}" if missing_oy else ""))
 
+    # ---- site analytics script must appear on every page ------------------
+    # Added Sep 2026 while tracing why X posts with thousands of views were
+    # not turning into subscribers. The site had no analytics of any kind, so
+    # there was no way to tell whether the drop was the traffic itself, the
+    # landing page, or the signup form. Checked against the actual rendered
+    # file, not by calling build_site's own page() again, for the same reason
+    # the canonical and option-year checks do it this way.
+    missing_gc = [os.path.relpath(f, site).replace(os.sep, "/") for f in html
+                  if build_site.GOATCOUNTER_SCRIPT not in open(f, encoding="utf-8").read()]
+    check("analytics script appears on every page", not missing_gc,
+          f"{len(missing_gc)} of {len(html)} pages missing it"
+          + (f" e.g. {missing_gc[:3]}" if missing_gc else ""))
+
     # ---- robots.txt must exist and point at the sitemap -------------------
     rb = os.path.join(site, "robots.txt")
     rb_txt = open(rb, encoding="utf-8").read() if os.path.exists(rb) else ""

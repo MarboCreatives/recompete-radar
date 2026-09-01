@@ -86,6 +86,16 @@ NONCOMPETITIVE_PROCEDURES = {"TN", "AC"}         # traditional non-competitive, 
 
 EYEBROW = "Government of Canada contract data"
 
+# Site analytics, added Sep 2026. GoatCounter collects no cookies and no
+# personal data, and it reads utm_source/utm_campaign off the URL on its own,
+# which is the only way to tell an organic X post, a boosted X post and a
+# LinkedIn click apart. Before this the site had no analytics of any kind, so
+# there was no way to see whether posts with thousands of views were even
+# reaching the site, let alone where a visitor dropped off. async and placed
+# last in <head> so it can never block first paint.
+GOATCOUNTER_SCRIPT = ('<script data-goatcounter="https://canadianrecompeteradar.goatcounter.com/count" '
+                      'async src="//gc.zgo.at/count.js"></script>')
+
 OPTION_YEARS = (
     "Expiry dates show the period a department has committed to. Many contracts "
     "carry option years that are not published until they are exercised, so treat "
@@ -300,17 +310,26 @@ def _select(name: str, label: str, options: list[tuple[str, str]]) -> str:
             f'{opts}</select>')
 
 
+VALUE_LINE = ("See a renewal before the notice goes out — the kind of "
+              "intel GovCon sales teams pay for, free here.")
+
+
 def signup_cta() -> str:
     """One line in the header pointing at the form further down the page.
 
     The form used to sit directly under the header on every page, which put five
     controls in front of the data. Moving it below the content risked the
     signups, so the pitch stays up top as a single line and jumps to the form.
+
+    Sep 2026: swapped the volume-stat clause for VALUE_LINE, the "why use this"
+    line Taj and Martin both asked for independently. The stat it replaces is
+    not lost, it still runs in full in signup_block() further down the page;
+    this is a swap, not an addition, so the header word count does not creep
+    back up the way it did before the redesign.
     """
     if not SIGNUP_ACTION:
         return ""
-    pitch = signup_pitch().replace(" Get the week\'s list by email, free.", "")
-    return (f'<p class="sb">{pitch} '
+    return (f'<p class="sb">{VALUE_LINE} '
             f'<a href="#brief"><strong>Get the free weekly brief &rarr;</strong></a></p>')
 
 
@@ -652,7 +671,7 @@ def page(title: str, desc: str, body: str, depth: int = 0, url: str = "",
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
-<style>{CSS}</style></head><body><div class="w">
+<style>{CSS}</style>{GOATCOUNTER_SCRIPT}</head><body><div class="w">
 <header><p class="eyebrow">{esc(EYEBROW)}</p>
 <h1><a href="{root}index.html" style="color:inherit">{SITE}</a></h1>
 <p class="sb">{esc(TAG)}</p>
