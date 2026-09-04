@@ -19,6 +19,7 @@ import os
 import re
 import sys
 import unicodedata
+import urllib.parse
 from collections import Counter, defaultdict
 
 # The site withholds the names of vendors who are private people. The rule is
@@ -537,6 +538,67 @@ def main() -> int:
           f"{len(junk_named)}: " + ", ".join(junk_named[:5]))
     check("no page is published under the fallback slug", not fallback_named,
           f"{len(fallback_named)}: " + ", ".join(fallback_named[:5]))
+
+    # ---- the link out to the source record must point at the right one ----
+    #
+    # Every contract row shows its reference number, and that text links to the
+    # government's own record for that contract. The failure that matters is not
+    # a dead link, it is a LIVE link pointing at somebody else's contract: the
+    # reader checks a row against the source, the source disagrees, and the site
+    # is the thing that looks wrong.
+    #
+    # Four ways that happens, all checked here against the rendered pages
+    # rather than against build_site's own idea of what it wrote:
+    #   1. the URL is built from the DISPLAYED reference number, which the table
+    #      clips to 34 characters, so it names a contract that does not exist
+    #   2. the org code and the reference number come from different rows
+    #   3. the href and the text beside it name different contracts
+    #   4. the link silently disappears from rows that should carry one
+    #
+    # Faults 1 and 2 are both caught by comparing the linked pair against the
+    # data, which is the only place the untruncated value exists: a clipped
+    # reference number cannot be recognised as clipped from the page alone.
+    SOURCE_BASE = "https://search.open.canada.ca/contracts/record/"
+    data_pairs = {(str(r.get("buyer_org_code") or "").strip(),
+                   str(r.get("reference_number") or "").strip())
+                  for r in rows}
+    data_refs = {ref: org for org, ref in data_pairs if org and ref}
+
+    bad_shape, unknown_pair, text_mismatch, lost_link = [], [], [], []
+    for p in html:
+        src = open(p, encoding="utf-8").read()
+        rel = os.path.relpath(p, site)
+        for block in re.findall(r'<span class="ref">(.*?)</span>', src, re.S):
+            m = re.search(r'<a href="([^"]+)"[^>]*>(.*?)</a>', block, re.S)
+            if not m:
+                shown = _unescape(re.sub(r"<[^>]+>", "", block)).strip()
+                # only a row whose data really lacks a field may go unlinked
+                if shown and shown in data_refs:
+                    lost_link.append(f"{rel}:{shown}")
+                continue
+            href, shown = _unescape(m.group(1)), _unescape(m.group(2)).strip()
+            if not href.startswith(SOURCE_BASE):
+                bad_shape.append(f"{rel}:{href[:60]}"); continue
+            parts = href[len(SOURCE_BASE):].split("%2C")
+            if len(parts) != 2 or not all(parts):
+                bad_shape.append(f"{rel}:{href[:60]}"); continue
+            org, ref = (urllib.parse.unquote(x) for x in parts)
+            if data_refs.get(ref) != org:
+                unknown_pair.append(f"{rel}:{org},{ref}")
+            # the text is the clipped reference number, so it must be a prefix
+            # of the one in the href - a reader comparing the two must not find
+            # the link pointing somewhere the visible number does not say
+            if not ref.startswith(shown):
+                text_mismatch.append(f"{rel}:shows {shown!r} links {ref!r}")
+
+    check("every source link has the expected shape", not bad_shape,
+          f"{len(bad_shape)}: " + ", ".join(bad_shape[:3]))
+    check("every source link names a contract in the data", not unknown_pair,
+          f"{len(unknown_pair)}: " + ", ".join(unknown_pair[:3]))
+    check("every source link matches the reference number it displays", not text_mismatch,
+          f"{len(text_mismatch)}: " + ", ".join(text_mismatch[:3]))
+    check("no row with a linkable reference number lost its link", not lost_link,
+          f"{len(lost_link)}: " + ", ".join(lost_link[:3]))
 
     # ---- headline numbers on the landing page must match the data ---------
     idx = os.path.join(site, "index.html")
