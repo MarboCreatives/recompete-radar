@@ -559,10 +559,23 @@ def main() -> int:
     # data, which is the only place the untruncated value exists: a clipped
     # reference number cannot be recognised as clipped from the page alone.
     SOURCE_BASE = "https://search.open.canada.ca/contracts/record/"
-    data_pairs = {(str(r.get("buyer_org_code") or "").strip(),
-                   str(r.get("reference_number") or "").strip())
-                  for r in rows}
-    data_refs = {ref: org for org, ref in data_pairs if org and ref}
+    # A reference number is unique only WITHIN a department. The source numbers
+    # contracts per organisation, so the same C-YYYY-YYYY-QN-NNNNN belongs to
+    # several departments at once, which is exactly why the URL needs both
+    # halves. The lookup is therefore keyed on the PAIR. Keying it on the
+    # reference number alone collapses those collisions: it passes the
+    # single-department fixture and fails against the real data.
+    linkable = {(str(r.get("buyer_org_code") or "").strip(),
+                 str(r.get("reference_number") or "").strip())
+                for r in rows}
+    linkable = {(org, ref) for org, ref in linkable if org and ref}
+    # the table clips the number it displays, so compare like with like
+    shown_linkable = {ref[:34] for _org, ref in linkable}
+    # What this cannot prove: where two departments happen to share a reference
+    # number (~3% of them), a link that carried the OTHER department's code
+    # would still name a real contract and pass. Catching that needs the link
+    # tied back to its own row rather than to the data as a whole. A systematic
+    # mispairing still fails loudly here, on the ~97% that are not shared.
 
     bad_shape, unknown_pair, text_mismatch, lost_link = [], [], [], []
     for p in html:
@@ -573,7 +586,7 @@ def main() -> int:
             if not m:
                 shown = _unescape(re.sub(r"<[^>]+>", "", block)).strip()
                 # only a row whose data really lacks a field may go unlinked
-                if shown and shown in data_refs:
+                if shown and shown in shown_linkable:
                     lost_link.append(f"{rel}:{shown}")
                 continue
             href, shown = _unescape(m.group(1)), _unescape(m.group(2)).strip()
@@ -583,7 +596,7 @@ def main() -> int:
             if len(parts) != 2 or not all(parts):
                 bad_shape.append(f"{rel}:{href[:60]}"); continue
             org, ref = (urllib.parse.unquote(x) for x in parts)
-            if data_refs.get(ref) != org:
+            if (org, ref) not in linkable:
                 unknown_pair.append(f"{rel}:{org},{ref}")
             # the text is the clipped reference number, so it must be a prefix
             # of the one in the href - a reader comparing the two must not find
