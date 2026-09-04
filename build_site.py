@@ -758,7 +758,12 @@ def contract_table(rows: list[dict], show: tuple[str, ...] = ("dept", "cat"),
             dept_txt = clip((c.get("buyer_org") or "").split(" | ")[0], 38)
             cells.append(f'<td class="d">{entity_link("department", c.get("buyer_org"), dept_txt, depth)}</td>')
         if "cat" in show:
-            cat_txt = clip(c.get("category_name") or c.get("commodity_code") or "", 38)
+            # A placeholder name has no page to link to, and printing it as
+            # plain text would put "#" in the Category column of every
+            # department and incumbent page that carries these rows.
+            raw_cat = (c.get("category_name") or "").strip()
+            cat_txt = ("—" if is_placeholder_category(raw_cat)
+                       else clip(raw_cat or c.get("commodity_code") or "", 38))
             cells.append(f'<td class="d">{entity_link("category", c.get("category_key"), cat_txt, depth)}</td>')
         cells.append(f'<td class="n d"{sort_key(bids)}>'
                      f'{bids if bids is not None else "—"}</td>')
@@ -808,6 +813,43 @@ def substantial(g: dict) -> bool:
     return g["count"] >= MIN_CONTRACTS or g["value"] >= MIN_VALUE
 
 
+# Category names that name no subject. Found on the live site 2026-09-03: a
+# published category page called "#" holding 19 Fisheries and Oceans contracts,
+# and pages called "NA" and "N/A". These are placeholders and export artifacts
+# in the source data, not subjects a reader can browse.
+#
+# Stored letters-only and lowercase, so one entry covers "NA", "N/A", "n.a."
+# and "N / A" without listing each spelling.
+PLACEHOLDER_CATEGORY_NAMES = {
+    "na", "nil", "none", "null", "nulle", "unknown", "unspecified",
+    "notapplicable", "sansobjet", "tbd", "tobedetermined",
+}
+
+
+def is_placeholder_category(name: str) -> bool:
+    """True when a category name carries no subject a reader could browse.
+
+    Two rules, both written from faults that reached the live site:
+
+    1. No letter anywhere. "#" is the case that prompted this. A name like that
+       also slugs to an empty string, so it can only reach a URL through the
+       fallback in slug() — which is how "#" became /category/x.html.
+    2. A known placeholder word. "NA" and "N/A" are ordinary strings with
+       letters in them, so rule 1 on its own leaves both of them published.
+
+    Only the WHOLE name is tested, never a word inside it, so real categories
+    such as "Other buildings" and "Rental - Other" are untouched. An empty name
+    is NOT treated as a placeholder here: add_category_key already falls back to
+    the commodity code for those rows, and that behaviour is left alone.
+    """
+    n = re.sub(r"\s+", " ", (name or "")).strip()
+    if not n:
+        return False
+    if not any(ch.isalpha() for ch in n):
+        return True
+    return re.sub(r"[^a-z]", "", n.lower()) in PLACEHOLDER_CATEGORY_NAMES
+
+
 def add_category_key(rows: list[dict]) -> None:
     """Collapse commodity codes onto their human name.
 
@@ -821,9 +863,16 @@ def add_category_key(rows: list[dict]) -> None:
     Normalization is case- and whitespace-insensitive, because the same
     description appears with inconsistent capitalisation
     ("Other Business services..." vs "Other business services...").
+
+    A name that is only a placeholder gets no key at all. group() skips a row
+    with an empty key, so those contracts get no category page and no category
+    link, while staying fully visible under their department and incumbent.
     """
     for r in rows:
         name = (r.get("category_name") or "").strip()
+        if is_placeholder_category(name):
+            r["category_key"] = ""
+            continue
         r["category_key"] = re.sub(r"\s+", " ", name).lower() or (r.get("commodity_code") or "")
 
 

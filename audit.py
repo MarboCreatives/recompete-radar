@@ -18,6 +18,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 from collections import Counter, defaultdict
 
 # The site withholds the names of vendors who are private people. The rule is
@@ -78,9 +79,27 @@ def main() -> int:
             and r["days_to_expiry"] >= 0]   # NB: `or -1` would drop day-zero (0 is falsy)
     total_value = sum(r.get("contract_value") or 0 for r in live)
 
+    # Deliberately reimplemented rather than imported, like the rest of this
+    # file: audit.py recomputes the expected numbers from the data so that a
+    # fault in build_site.py shows up as a disagreement. The placeholder rule is
+    # written out again here for the same reason.
+    PLACEHOLDER_CATS = {"na", "nil", "none", "null", "nulle", "unknown",
+                        "unspecified", "notapplicable", "sansobjet", "tbd",
+                        "tobedetermined"}
+
+    def placeholder_cat(name):
+        n = re.sub(r"\s+", " ", (name or "")).strip()
+        if not n:
+            return False
+        if not any(ch.isalpha() for ch in n):
+            return True
+        return re.sub(r"[^a-z]", "", n.lower()) in PLACEHOLDER_CATS
+
     def norm_cat(r):
-        return re.sub(r"\s+", " ", (r.get("category_name") or "").strip()).lower() \
-               or (r.get("commodity_code") or "")
+        name = (r.get("category_name") or "").strip()
+        if placeholder_cat(name):
+            return ""
+        return re.sub(r"\s+", " ", name).lower() or (r.get("commodity_code") or "")
 
     depts = defaultdict(list)
     vends = defaultdict(list)
@@ -479,6 +498,45 @@ def main() -> int:
           f"{len(titles)-len(set(titles))} duplicated")
     check("all meta descriptions unique", len(set(descs)) == len(descs),
           f"{len(descs)-len(set(descs))} duplicated")
+
+    # ---- published pages must be named by something a reader can read -----
+    #
+    # Written after a live category page called "#" was found by accident. It
+    # held 19 real contracts, sat in the sitemap and was linked from the
+    # category index, and none of the checks above objected: it had a title, a
+    # unique description, a valid canonical and working links. Both checks below
+    # read the RENDERED name out of each page, so they do not depend on how
+    # build_site decides what to publish.
+    def page_name(path, title):
+        folder = os.path.basename(os.path.dirname(path))
+        base = os.path.basename(path)
+        if folder not in ("category", "department", "incumbent", "province"):
+            return None
+        if base.startswith("index"):
+            return None
+        m = re.match(r"^(.*?) — contracts expiring \|", _unescape(title))
+        return m.group(1).strip() if m else None
+
+    def slug_is_empty(name):
+        """True when slug() could only name this page through its "x" fallback."""
+        decomposed = unicodedata.normalize("NFKD", name or "")
+        ascii_text = "".join(c for c in decomposed if not unicodedata.combining(c))
+        return not re.sub(r"[^a-z0-9]+", "-", ascii_text.lower()).strip("-")
+
+    junk_named, fallback_named = [], []
+    for p, t in zip(html, titles):
+        name = page_name(p, t)
+        if name is None:
+            continue
+        if slug_is_empty(name):
+            fallback_named.append(os.path.relpath(p, site))
+        if os.path.basename(os.path.dirname(p)) == "category" and placeholder_cat(name):
+            junk_named.append(os.path.relpath(p, site))
+
+    check("no category page is named by a placeholder", not junk_named,
+          f"{len(junk_named)}: " + ", ".join(junk_named[:5]))
+    check("no page is published under the fallback slug", not fallback_named,
+          f"{len(fallback_named)}: " + ", ".join(fallback_named[:5]))
 
     # ---- headline numbers on the landing page must match the data ---------
     idx = os.path.join(site, "index.html")
