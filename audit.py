@@ -547,7 +547,7 @@ def main() -> int:
     # reader checks a row against the source, the source disagrees, and the site
     # is the thing that looks wrong.
     #
-    # Three ways that happens, all checked here against the rendered pages
+    # Four ways that happens, all checked here against the rendered pages
     # rather than against build_site's own idea of what it wrote:
     #   1. the URL is built from the DISPLAYED reference number, which the table
     #      clips to 34 characters, so it names a contract that does not exist
