@@ -60,6 +60,13 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", required=True)
     ap.add_argument("--site", required=True)
+    ap.add_argument("--app-url", default="",
+                    help="The same value passed to build_site.py --app-url.\n"
+                         "Given, every contract row must carry a Watch link;\n"
+                         "omitted, no page may carry one. Either way a\n"
+                         "mismatch between the two is a failure, so a workflow\n"
+                         "that sets the flag for one and not the other cannot\n"
+                         "pass.")
     ap.add_argument("--allow-small", action="store_true",
                     help="Skip the plausibility floors and widen the landing-page\n"
                          "value tolerance. For the offline fixture check ONLY: a\n"
@@ -612,6 +619,161 @@ def main() -> int:
           f"{len(text_mismatch)}: " + ", ".join(text_mismatch[:3]))
     check("no row with a linkable reference number lost its link", not lost_link,
           f"{len(lost_link)}: " + ", ".join(lost_link[:3]))
+
+    # ---- Watch links into the companion app ------------------------------
+    #
+    # What could go wrong, and what each check below is for:
+    #
+    #   * the flag is set on one command and not the other, so the site ships
+    #     with no entry point and the gate stays green -> checks 1 and 2;
+    #   * a key is built from the CLIPPED reference number, so it names a
+    #     contract that does not exist -> checks 3 and 4;
+    #   * a key is built from the wrong department, so it names somebody
+    #     else's contract -> checks 3 and 4;
+    #   * a supplier page links to a different supplier's key -> check 5;
+    #   * a withheld individual gets a supplier Watch link, putting a private
+    #     person's normalised name into a URL -> check 6.
+    #
+    # Check 5 does NOT ask build_site which vendor a page belongs to. It reads
+    # the contract references off the rendered page, looks those rows up in the
+    # pipeline input, and derives the vendor key from the data. An audit that
+    # asks the code under test what the right answer is cannot detect that code
+    # being wrong; that is exactly how the is_individual check was blinded.
+    # Check 6 likewise decides "withheld" from the label printed on the page,
+    # never by calling is_individual.
+    APP_URL = (a.app_url or "").rstrip("/")
+    # Any anchor into the app, whatever wraps it. An earlier draft of this
+    # matched only the <span class="watch"> form the contract rows use, so it
+    # never saw the supplier link on a supplier page, and the check that ties a
+    # supplier key to its own page passed while testing nothing. Matching the
+    # href rather than the wrapper is what makes it impossible to add a third
+    # kind of Watch link that this audit silently ignores.
+    WATCH_SPAN = re.compile(r'<a href="([^"]*/watch\?[^"]*)"')
+    ROW_PAIR = re.compile(
+        r'<span class="ref">(?:(?!</span>).)*?href="([^"]+)"(?:(?!</span>).)*?</span>'
+        r'\s*<span class="watch"><a href="([^"]+)"', re.S)
+    # The literal is written here rather than imported, so this check has its
+    # own idea of what a withheld name looks like. The drift tripwire below
+    # fails if build_site ever changes the label without this being updated.
+    PERSON_LABEL = "Individual supplier (name withheld)"
+
+    def watch_parts(url: str):
+        """(kind, key) from a Watch address, or None if it is not one."""
+        if not APP_URL or not url.startswith(APP_URL + "/watch?"):
+            return None
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query, keep_blank_values=True)
+        kinds, keys = q.get("kind", []), q.get("key", [])
+        if len(kinds) != 1 or len(keys) != 1:
+            return None
+        if kinds[0] not in ("contract", "vendor"):
+            return None
+        return kinds[0], keys[0]
+
+    all_watch, bad_watch, wrong_key, orphan_watch = [], [], [], []
+    supplier_watch = []          # (relpath, key, pairs on that page)
+    person_page_watch, rows_missing_watch = [], []
+
+    for p in html:
+        src = open(p, encoding="utf-8").read()
+        rel = os.path.relpath(p, site).replace(os.sep, "/")
+        found = WATCH_SPAN.findall(src)
+        all_watch.extend((rel, u) for u in found)
+        for u in found:
+            if watch_parts(_unescape(u)) is None:
+                bad_watch.append(f"{rel}:{_unescape(u)[:80]}")
+
+        # A contract Watch link must agree with the source-record link beside it.
+        for ref_href, watch_href in ROW_PAIR.findall(src):
+            parts = watch_parts(_unescape(watch_href))
+            if parts is None or parts[0] != "contract":
+                continue
+            src_tail = _unescape(ref_href)[len(SOURCE_BASE):]
+            halves = [urllib.parse.unquote(x) for x in src_tail.split("%2C")]
+            if len(halves) != 2:
+                continue
+            if parts[1] != f"{halves[0]},{halves[1]}":
+                wrong_key.append(f"{rel}: record {halves[0]},{halves[1]} but watch {parts[1]}")
+            if tuple(halves) not in linkable:
+                orphan_watch.append(f"{rel}:{parts[1]}")
+
+        # Every row carrying a source link must carry a Watch link too, or the
+        # entry point is quietly missing from part of the site.
+        if APP_URL:
+            source_rows = len(re.findall(r'<span class="ref"><a ', src))
+            paired = len(ROW_PAIR.findall(src))
+            if source_rows != paired:
+                rows_missing_watch.append(f"{rel}: {source_rows} source links, {paired} with a Watch link")
+
+        # Supplier links: only on a supplier's own page, and only that supplier.
+        for u in found:
+            parts = watch_parts(_unescape(u))
+            if parts is None or parts[0] != "vendor":
+                continue
+            pairs = set()
+            for m in re.finditer(r'<span class="ref"><a href="([^"]+)"', src):
+                tail = _unescape(m.group(1))[len(SOURCE_BASE):]
+                halves = [urllib.parse.unquote(x) for x in tail.split("%2C")]
+                if len(halves) == 2:
+                    pairs.add((halves[0], halves[1]))
+            supplier_watch.append((rel, parts[1], pairs))
+            if f"<h2>{PERSON_LABEL}</h2>" in src:
+                person_page_watch.append(f"{rel}:{parts[1]}")
+
+    if APP_URL:
+        check("the site carries Watch links into the app", len(all_watch) > 0,
+              "no Watch link was rendered anywhere; --app-url reached audit but not build_site")
+    else:
+        check("no Watch link is rendered when no app URL is configured", not all_watch,
+              f"{len(all_watch)} found with --app-url unset")
+
+    check("every Watch link has the expected shape", not bad_watch,
+          f"{len(bad_watch)}: " + ", ".join(bad_watch[:3]))
+    check("every contract Watch key matches the source link beside it", not wrong_key,
+          f"{len(wrong_key)}: " + ", ".join(wrong_key[:3]))
+    check("every contract Watch key names a contract in the data", not orphan_watch,
+          f"{len(orphan_watch)}: " + ", ".join(orphan_watch[:3]))
+    check("no row with a source link is missing its Watch link", not rows_missing_watch,
+          f"{len(rows_missing_watch)}: " + ", ".join(rows_missing_watch[:3]))
+
+    # Derive each supplier page's vendor from the DATA, via the contracts the
+    # page itself lists, and require the Watch key to equal it.
+    by_pair = {(str(r.get("buyer_org_code") or "").strip(),
+                str(r.get("reference_number") or "").strip()): r for r in rows}
+    supplier_mismatch = []
+    for rel, key, pairs in supplier_watch:
+        keys_in_data = {str(by_pair[p].get("vendor_key") or "").strip()
+                        for p in pairs if p in by_pair}
+        keys_in_data.discard("")
+        if not keys_in_data:
+            supplier_mismatch.append(f"{rel}: no row of this page could be found in the data")
+        elif keys_in_data != {key}:
+            supplier_mismatch.append(f"{rel}: page lists {sorted(keys_in_data)[:2]} but watch key is {key!r}")
+    check("every supplier Watch key is the supplier its own page lists", not supplier_mismatch,
+          f"{len(supplier_mismatch)}: " + ", ".join(supplier_mismatch[:3]))
+    # Every supplier page carries the link, and nothing else does. This is the
+    # falsifiable half of "individuals are never offered": a supplier page
+    # exists only for a group with a vendor_key, and suppress_individuals()
+    # blanks that key before any grouping, so a withheld person has no page to
+    # carry a link. That exclusion is upstream and is not re-implemented here;
+    # re-deriving it would mean asking the code under test for the right answer,
+    # which is how the is_individual check was once blinded. What IS checkable
+    # from the outside is that the link appears on exactly the pages that
+    # should have it, and check 5 above ties each key to the contracts its own
+    # page lists, so a link naming a different supplier fails there.
+    incumbent_pages = {os.path.relpath(p, site).replace(os.sep, "/") for p in html
+                       if os.path.relpath(p, site).replace(os.sep, "/").startswith("incumbent/")
+                       and not os.path.basename(p).startswith("index")}
+    pages_with_supplier_link = {rel for rel, _k, _p in supplier_watch}
+    if APP_URL:
+        check("every supplier page carries a Watch link, and no other page does",
+              pages_with_supplier_link == incumbent_pages,
+              f"pages missing one: {sorted(incumbent_pages - pages_with_supplier_link)[:3]}; "
+              f"pages that should not have one: {sorted(pages_with_supplier_link - incumbent_pages)[:3]}")
+    check("no page headed with a withheld name carries a supplier Watch link", not person_page_watch,
+          f"{len(person_page_watch)}: " + ", ".join(person_page_watch[:3]))
+    check("the withheld-name label this audit looks for is the one the site prints",
+          build_site.PERSON_LABEL == PERSON_LABEL,
+          f"audit expects {PERSON_LABEL!r}, build_site prints {build_site.PERSON_LABEL!r}")
 
     # ---- headline numbers on the landing page must match the data ---------
     idx = os.path.join(site, "index.html")
