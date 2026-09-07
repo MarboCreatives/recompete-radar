@@ -1016,17 +1016,35 @@ PROVINCE_NAME = {"NL": "Newfoundland and Labrador", "NS": "Nova Scotia",
                  "NT-NU": "Northwest Territories and Nunavut", "YT": "Yukon"}
 
 
+# A published forward sortation area is a letter, a digit and a letter: "H4B",
+# "K1N". Reading only the first character is not enough to know that a value IS
+# one. Foreign suppliers carry the literal string "NA" in this field, and "N" is
+# a real Ontario prefix, so every foreign supplier in the dataset was counted as
+# Ontario. Measured on the live window before this was written: 70 of 70 foreign
+# suppliers landed on the Ontario page, 12.6% of the rows that page called
+# Ontario, and the page carried a line promising they appeared on no province
+# page at all.
+#
+# Checking the SHAPE is what separates a postal code from a placeholder. It is
+# deliberately not a check on country_of_vendor: CARAHSOFT CANADA INC is
+# recorded as country US with an Ottawa postal code, and it belongs on the
+# Ontario page. Where the supplier is registered in Canada and where the
+# supplier is foreign are two different questions, and only the first one
+# builds this key.
+FSA_SHAPE = re.compile(r"^[A-Z][0-9][A-Z]")
+
+
 def add_province_key(rows: list[dict]) -> None:
     """Tag each contract with the supplier province, where one can be read.
 
-    Contracts with no postal code, or a foreign one, get no key and are simply
-    absent from the province pages. An "Unknown" province page would be a large
-    page that tells the reader nothing, which is the thin content this build
-    already works to avoid.
+    Contracts with no postal code, a foreign one, or a placeholder in the field
+    get no key and are simply absent from the province pages. An "Unknown"
+    province page would be a large page that tells the reader nothing, which is
+    the thin content this build already works to avoid.
     """
     for r in rows:
         pc = (r.get("vendor_postal_code") or "").strip().upper()
-        code = PROVINCE_CODE.get(pc[:1]) if pc else None
+        code = PROVINCE_CODE.get(pc[:1]) if FSA_SHAPE.match(pc) else None
         r["province_key"] = code or ""
         r["province_name"] = PROVINCE_NAME.get(code or "", "")
 

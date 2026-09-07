@@ -109,9 +109,27 @@ def main() -> int:
             return ""
         return re.sub(r"\s+", " ", name).lower() or (r.get("commodity_code") or "")
 
+    # Province is derived from the supplier's forward sortation area. Written out
+    # again here rather than imported, like the rest of this file. The shape test
+    # is the whole point: the field carries the literal string "NA" for foreign
+    # suppliers, and reading only its first character filed every one of them
+    # under Ontario, because "N" is a real Ontario prefix.
+    PROV_BY_LETTER = {"A": "NL", "B": "NS", "C": "PE", "E": "NB",
+                      "G": "QC", "H": "QC", "J": "QC",
+                      "K": "ON", "L": "ON", "M": "ON", "N": "ON", "P": "ON",
+                      "R": "MB", "S": "SK", "T": "AB", "V": "BC",
+                      "X": "NT-NU", "Y": "YT"}
+
+    def province_of(r):
+        pc = (r.get("vendor_postal_code") or "").strip().upper()
+        if not re.match(r"^[A-Z][0-9][A-Z]", pc):
+            return ""
+        return PROV_BY_LETTER.get(pc[:1], "")
+
     depts = defaultdict(list)
     vends = defaultdict(list)
     cats = defaultdict(list)
+    provs = defaultdict(list)
     for r in live:
         if r.get("buyer_org"):
             depts[r["buyer_org"]].append(r)
@@ -120,6 +138,9 @@ def main() -> int:
         k = norm_cat(r)
         if k:
             cats[k].append(r)
+        p = province_of(r)
+        if p:
+            provs[p].append(r)
 
     def substantial(items):
         return len(items) >= 3 or sum(i.get("contract_value") or 0 for i in items) >= 5_000_000
@@ -127,6 +148,7 @@ def main() -> int:
     exp_dept = sum(1 for v in depts.values() if substantial(v))
     exp_vend = sum(1 for v in vends.values() if substantial(v))
     exp_cat = sum(1 for v in cats.values() if substantial(v))
+    exp_prov = sum(1 for v in provs.values() if substantial(v))
 
     # ---- filesystem reality ----------------------------------------------
     html = []
@@ -152,6 +174,40 @@ def main() -> int:
     check("category pages match expectation",
           count("category") == exp_cat,
           f"expected {exp_cat}, found {count('category')}")
+    check("province pages match expectation",
+          count("province") == exp_prov,
+          f"expected {exp_prov}, found {count('province')}")
+
+    # ---- what each province page COUNTS, not just that it exists -----------
+    #
+    # A page-count check cannot see this class of fault. When foreign suppliers
+    # were filed under Ontario the number of province pages was still right;
+    # Ontario's contents were wrong. So each page's own headline count is read
+    # back and compared with the data.
+    #
+    # The province pages also print, in their own words, that contracts with no
+    # postal code or a foreign one appear on no province page. That sentence was
+    # published while the opposite was true. A page that makes a claim about what
+    # it excludes has to be checked against what it includes.
+    prov_off = []
+    for fn in (os.listdir(os.path.join(site, "province"))
+               if os.path.isdir(os.path.join(site, "province")) else []):
+        if not fn.endswith(".html") or fn.startswith("index"):
+            continue
+        src = open(os.path.join(site, "province", fn), encoding="utf-8").read()
+        m = re.search(r'<div class="v">([\d,]+)</div><div class="l">Contracts</div>', src)
+        t = re.search(r"<title>(.*?) — contracts expiring \|", src, re.S)
+        if not m or not t:
+            continue
+        shown = int(m.group(1).replace(",", ""))
+        name = _unescape(t.group(1)).strip()
+        want = next((len(v) for k, v in provs.items()
+                     if build_site.PROVINCE_NAME.get(k, "") == name), None)
+        if want is not None and want != shown:
+            prov_off.append(f"{name}: page {shown}, data {want}")
+
+    check("province page counts match the data", not prov_off,
+          f"{len(prov_off)}: " + "; ".join(prov_off[:4]))
 
     # ---- sitemap must point only at files that exist ----------------------
     sm_path = os.path.join(site, "sitemap.xml")
