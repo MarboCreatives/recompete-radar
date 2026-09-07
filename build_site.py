@@ -283,6 +283,75 @@ def entity_link(folder: str, key: Optional[str], text: str, depth: int) -> str:
 # six departments and seven years resolved to the correct contract.
 SOURCE_RECORD_BASE = "https://search.open.canada.ca/contracts/record/"
 
+# --- Watch links into the companion app --------------------------------------
+# The app at --app-url lets a signed-in person follow a contract or a supplier
+# and be told when something changes. This site is where they find the thing to
+# follow, so every contract row and every supplier page carries one link into
+# it.
+#
+# If --app-url is not set, NO link is rendered anywhere. That is the same rule
+# as --signup-action, for the same reason: a Watch link pointing nowhere looks
+# like a working control and does nothing. audit.py is told the same value and
+# fails when what it finds disagrees, so a workflow that sets the flag for one
+# and not the other cannot pass.
+#
+# The keys are the app's own, and the app refuses anything else:
+#   contract  "<buyer_org_code>,<reference_number>"   e.g. ic,C-2025-2026-Q1-00127
+#   vendor    "<vendor_key>"                          e.g. lumina it
+# A reference number is unique only WITHIN a department - 3,537 of them are
+# held by more than one - so the contract key carries both halves, exactly as
+# the source-record URL does. The FULL reference number is used; the table
+# clips the text it displays to 34 characters and a key built from clipped text
+# names a contract that does not exist.
+APP_URL = ""
+
+
+def watch_url(kind: str, key: str) -> Optional[str]:
+    """The app address that offers to watch one thing, or None."""
+    if not APP_URL or not key:
+        return None
+    return (f"{APP_URL}/watch?kind={urllib.parse.quote(kind, safe='')}"
+            f"&key={urllib.parse.quote(key, safe='')}")
+
+
+def contract_watch_html(row: dict) -> str:
+    """The Watch link for one contract row.
+
+    It sits inside the incumbent cell, on the same line as the reference
+    number, and never in a column of its own: an 8th column reintroduces the
+    mobile overflow the .tw wrapper exists to prevent.
+
+    Rows whose supplier name is withheld still get one. The contract and its
+    published reference are public either way, and the app stores the contract,
+    not the person.
+    """
+    org = str(row.get("buyer_org_code") or "").strip()
+    ref = str(row.get("reference_number") or "").strip()
+    if not org or not ref:
+        return ""
+    url = watch_url("contract", f"{org},{ref}")
+    if not url:
+        return ""
+    return (f'<span class="watch"><a href="{esc(url)}" rel="nofollow"'
+            f' title="Follow this contract and be told when it changes">Watch</a></span>')
+
+
+def supplier_watch_html(vendor_key: str) -> str:
+    """The Watch link on a supplier's own page.
+
+    Reached only for a group that HAS a page, and a group has a page only if it
+    has a key. suppress_individuals() blanks the vendor_key of a private person
+    before any grouping happens, so a withheld individual has no page, no index
+    entry and therefore no supplier Watch link. The suppression rule is not
+    re-implemented here, and must not be: this depends on it, once, upstream.
+    """
+    url = watch_url("vendor", vendor_key or "")
+    if not url:
+        return ""
+    return (f'<p class="watchp"><a href="{esc(url)}" rel="nofollow">Watch this supplier</a>'
+            f' - be told when a contract of theirs changes, or when they win new work.</p>')
+
+
 
 def source_record_url(org_code: Optional[str], reference_number: Optional[str]) -> Optional[str]:
     """The government's own published record for one contract, or None.
@@ -775,6 +844,13 @@ def contract_table(rows: list[dict], show: tuple[str, ...] = ("dept", "cat"),
             ref_html = f'<br><span class="ref">{esc(str(ref)[:34])}</span>'
         else:
             ref_html = ""
+
+        # Placed AFTER the .ref span and not inside it: audit.py reads that span
+        # with a non-greedy match to check the source link, and nesting another
+        # anchor in it would change what that check sees.
+        watch_html = contract_watch_html(c)
+        if watch_html:
+            ref_html = f"{ref_html} {watch_html}" if ref_html else f"<br>{watch_html}"
 
         # What the contract is actually for, when the buyer wrote it down and
         # the text passes the name scan. This is the field readers asked for:
@@ -1462,6 +1538,7 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
                    'published records. Related legal entities are listed separately, '
                    'so a corporate group\'s total exposure may be higher.</p>'
                    if folder == "incumbent" else "")
+                + (supplier_watch_html(key) if folder == "incumbent" else "")
                 + ('<p class="sb">Province is read from the postal code of the '
                    'supplier in the published record, so this is where the incumbent '
                    'is based, not where the work is performed. The published data '
@@ -1709,6 +1786,12 @@ def main() -> int:
     ap.add_argument("--google-verification", default="",
                     help="Google Search Console token (the content=\"...\" value\n"
                          "only, not the whole meta tag).")
+    ap.add_argument("--app-url", default="",
+                    help="Origin of the companion watchlist app, e.g.\n"
+                         "https://recompete-scanner.vercel.app\n"
+                         "Omitted = no Watch link is rendered at all, because a\n"
+                         "link pointing nowhere looks like a working control.\n"
+                         "Pass the same value to audit.py.")
     ap.add_argument("--base-url", default="",
                     help="full site URL, e.g. https://example.com — required for a\n                          valid sitemap; relative paths are rejected by Search Console")
     args = ap.parse_args()
@@ -1752,6 +1835,22 @@ def main() -> int:
                   "contact method.", file=sys.stderr)
             return 3
     SIGNUP_ACTION = args.signup_action
+
+    # An origin and nothing else. A value carrying a path, a query or a
+    # fragment would produce "https://app/x/watch?kind=..." and every Watch
+    # link on 2,000+ pages would 404. Refuse rather than publish that.
+    global APP_URL
+    if args.app_url:
+        u = urllib.parse.urlparse(args.app_url)
+        if (u.scheme != "https" or not u.netloc
+                or u.path.strip("/") or u.params or u.query or u.fragment):
+            print(f"ERROR: --app-url must be an https origin and nothing more:\n"
+                  f"  got      {args.app_url}\n"
+                  f"  expected https://host.example\n"
+                  f"A path or query here would break every Watch link on the site.",
+                  file=sys.stderr)
+            return 5
+        APP_URL = args.app_url.rstrip("/")
 
     # Google's UI hands you a whole <meta ...> tag, so pasting the tag rather
     # than the bare token is the obvious mistake. Nesting a tag inside an
