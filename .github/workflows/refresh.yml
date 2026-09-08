@@ -127,7 +127,7 @@ jobs:
             --signup-action "https://app.kit.com/forms/9791323/subscriptions" \
             --business-name "Canadian Recompete Radar" \
             --mailing-address "PO Box 1184, Pembroke, Ontario K8A 6Y6" \
-            --app-url "https://recompete-scanner.vercel.app"
+            --app-url "https://app.recompeteradar.ca"
 
       # THE SAFETY GATE. audit.py exits non-zero on any failure, which fails the
       # job, which means nothing deploys. A bad refresh cannot reach the public
@@ -137,7 +137,7 @@ jobs:
           python3 audit.py \
             --input recompete_pipeline.json \
             --site site \
-            --app-url "https://recompete-scanner.vercel.app"
+            --app-url "https://app.recompeteradar.ca"
 
       # Google Search Console verification. The site directory is rebuilt from
       # scratch every run, so a file uploaded once would be deleted at the next
