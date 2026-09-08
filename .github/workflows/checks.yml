@@ -59,9 +59,11 @@ jobs:
             --base-url "https://example.invalid" \
             --signup-action "https://app.kit.com/forms/9791323/subscriptions" \
             --business-name "Smoke Test" \
-            --mailing-address "1 Test St, Testville, Ontario A1A 1A1"
+            --mailing-address "1 Test St, Testville, Ontario A1A 1A1" \
+            --app-url "https://app.example.invalid"
 
           python3 audit.py \
             --input /tmp/smoke-pipeline.json \
             --site /tmp/smoke-site \
-            --allow-small
+            --allow-small \
+            --app-url "https://app.example.invalid"

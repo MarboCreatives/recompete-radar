@@ -726,6 +726,7 @@ def main() -> int:
         return kinds[0], keys[0]
 
     all_watch, bad_watch, wrong_key, orphan_watch = [], [], [], []
+    contract_labels = []         # (relpath, key, name, dept) per contract link
     supplier_watch = []          # (relpath, key, pairs on that page)
     person_page_watch, rows_missing_watch = [], []
 
@@ -737,6 +738,20 @@ def main() -> int:
         for u in found:
             if watch_parts(_unescape(u)) is None:
                 bad_watch.append(f"{rel}:{_unescape(u)[:80]}")
+
+        # The display labels a contract link carries, collected as written.
+        # Read from the href rather than from the surrounding markup, for the
+        # same reason the shape check is: the href is the thing the app sees.
+        for u in found:
+            uu = _unescape(u)
+            parts = watch_parts(uu)
+            if parts is None or parts[0] != "contract":
+                continue
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(uu).query,
+                                      keep_blank_values=True)
+            contract_labels.append((rel, parts[1],
+                                    (q.get("name") or [None])[0],
+                                    (q.get("dept") or [None])[0]))
 
         # A contract Watch link must agree with the source-record link beside it.
         for ref_href, watch_href in ROW_PAIR.findall(src):
@@ -795,6 +810,47 @@ def main() -> int:
     # page itself lists, and require the Watch key to equal it.
     by_pair = {(str(r.get("buyer_org_code") or "").strip(),
                 str(r.get("reference_number") or "").strip()): r for r in rows}
+    # ---- The labels a watched row is rendered with -------------------------
+    # The app stores no contract data, so these two labels are the only thing
+    # that lets its watchlist say what a row is. They are display text and
+    # never identity: the key remains the only name, and a wrong label must not
+    # be able to point a row at a different contract.
+    #
+    # Compared against the DATA, not against the page. A label that agrees with
+    # the markup beside it but names the wrong contract would pass a
+    # page-to-page comparison and fails here.
+    #
+    # The comparison is EXACT, and no substitution is allowed. An earlier
+    # version of this check also accepted PERSON_LABEL, on the belief that the
+    # site substitutes it while the data still holds the real name. That was
+    # wrong and a break test found it: line 82 above runs
+    # build_site.suppress_individuals() over this audit's own copy of the rows,
+    # so the data already carries PERSON_LABEL exactly where the site sends it.
+    # The allowance bought nothing and opened a hole, because any row at all
+    # could then hide a real supplier behind a withheld label and pass.
+    missing_labels, wrong_labels = [], []
+    for rel, key, name, dept in contract_labels:
+        if not (name or "").strip() or not (dept or "").strip():
+            missing_labels.append(f"{rel}:{key}")
+            continue
+        halves = key.split(",", 1)
+        r = by_pair.get((halves[0], halves[1])) if len(halves) == 2 else None
+        if r is None:
+            continue                      # the orphan check above owns this
+        want_name = str(r.get("vendor_name") or "").strip()
+        want_dept = str(r.get("buyer_org") or "").split(" | ")[0].strip()
+        if name.strip() != want_name:
+            wrong_labels.append(f"{rel}:{key}: name {name.strip()!r}, data says {want_name!r}")
+        elif dept.strip() != want_dept:
+            wrong_labels.append(f"{rel}:{key}: dept {dept.strip()!r}, data says {want_dept!r}")
+    if APP_URL:
+        check("every contract Watch link carries a supplier and a department label",
+              not missing_labels,
+              f"{len(missing_labels)}: " + ", ".join(missing_labels[:3]))
+        check("every contract Watch label names what the data names",
+              not wrong_labels,
+              f"{len(wrong_labels)}: " + ", ".join(wrong_labels[:3]))
+
     supplier_mismatch = []
     for rel, key, pairs in supplier_watch:
         keys_in_data = {str(by_pair[p].get("vendor_key") or "").strip()
