@@ -306,12 +306,24 @@ SOURCE_RECORD_BASE = "https://search.open.canada.ca/contracts/record/"
 APP_URL = ""
 
 
-def watch_url(kind: str, key: str) -> Optional[str]:
-    """The app address that offers to watch one thing, or None."""
+def watch_url(kind: str, key: str, labels: Optional[dict] = None) -> Optional[str]:
+    """The app address that offers to watch one thing, or None.
+
+    `labels` is display text for the app's watchlist. It is NOT identity: the
+    key above is the only thing that names the contract, and the app is told to
+    treat a label as text and nothing else. Labels are optional and are omitted
+    when empty, because every row already in the app's database was made before
+    they existed and a link may always arrive without them.
+    """
     if not APP_URL or not key:
         return None
-    return (f"{APP_URL}/watch?kind={urllib.parse.quote(kind, safe='')}"
-            f"&key={urllib.parse.quote(key, safe='')}")
+    url = (f"{APP_URL}/watch?kind={urllib.parse.quote(kind, safe='')}"
+           f"&key={urllib.parse.quote(key, safe='')}")
+    for label, value in (labels or {}).items():
+        value = str(value or "").strip()
+        if value:
+            url += f"&{label}={urllib.parse.quote(value, safe='')}"
+    return url
 
 
 def contract_watch_html(row: dict) -> str:
@@ -329,7 +341,24 @@ def contract_watch_html(row: dict) -> str:
     ref = str(row.get("reference_number") or "").strip()
     if not org or not ref:
         return ""
-    url = watch_url("contract", f"{org},{ref}")
+    # The app stores no contract data. Without these two labels a watched row
+    # there reads as a department code and a reference number and nothing else,
+    # which does not tell a person what they followed.
+    #
+    # `row` has already been through suppress_individuals(), which runs on the
+    # live rows before any page is rendered, so a private person arrives here
+    # as PERSON_LABEL and that is the text that travels. The suppression rule
+    # is inherited, once, from upstream. It is not re-implemented here and must
+    # not be.
+    #
+    # buyer_org is the bilingual "English | French" form. The table shows the
+    # English half and so does this, so the label matches what the reader
+    # pressed Watch on. The 38-character clip on the table is a layout rule and
+    # is deliberately not applied here.
+    url = watch_url("contract", f"{org},{ref}", {
+        "name": row.get("vendor_name"),
+        "dept": str(row.get("buyer_org") or "").split(" | ")[0],
+    })
     if not url:
         return ""
     return (f'<span class="watch"><a href="{esc(url)}" rel="nofollow"'
