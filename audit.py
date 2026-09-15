@@ -883,6 +883,33 @@ def main() -> int:
               f"pages that should not have one: {sorted(pages_with_supplier_link - incumbent_pages)[:3]}")
     check("no page headed with a withheld name carries a supplier Watch link", not person_page_watch,
           f"{len(person_page_watch)}: " + ", ".join(person_page_watch[:3]))
+    # ---- The suppression rule still covers the shapes that once escaped ----
+    #
+    # Every other name check here uses is_individual as its own oracle, so none
+    # of them can tell that the RULE is too narrow: a name the rule does not
+    # recognise is not a name the rule reports. That blind spot published six
+    # real people on 14 September 2026.
+    #
+    # This check is different. It asserts the rule against shapes with a known
+    # answer. It cannot find the next unknown gap and is not meant to; it stops
+    # these three from coming back. The names are invented, because the real
+    # ones are personal data and stay out of this repository.
+    _shapes = [("a title in front of the given name", "Chief Dana Morgan Fields"),
+               ("a French article inside the surname", "Dana La Fielding"),
+               ("a given name added on 2026-09-14", "Trevor Fielding")]
+    _missed = [lbl for lbl, nm in _shapes if not build_site.is_individual(nm)]
+    check("the suppression rule still covers the shapes that escaped in September",
+          not _missed, "; ".join(_missed) if _missed else "all three withheld")
+
+    # A rule widened until everything is a person protects nobody and hides the
+    # data. These six must stay published.
+    _firms = ["Le Groupe Conseil", "LA CAPITALE", "SUN LIFE", "BC Hydro",
+              "GFL Environmental", "AGILENT TECHNOLOGIES CANADA INC"]
+    _swallowed = [f for f in _firms if build_site.is_individual(f)]
+    check("the widened rule still treats plain company names as companies",
+          not _swallowed,
+          ", ".join(_swallowed) if _swallowed else f"0 of {len(_firms)}")
+
     check("the withheld-name label this audit looks for is the one the site prints",
           build_site.PERSON_LABEL == PERSON_LABEL,
           f"audit expects {PERSON_LABEL!r}, build_site prints {build_site.PERSON_LABEL!r}")

@@ -1130,6 +1130,11 @@ REGROUPEMENT CONCIERGERIE TOURISM AUTHORITY HTO AEC INDIGENOUS METIS INUIT
 # Common given names, used only for the weaker second rule below. Deliberately
 # short: it exists to catch "GIVEN SURNAME" and "SURNAME GIVEN" forms that carry
 # no comma, not to be a census.
+# Extended 14 September 2026. The list held darcy, murray and victoria but
+# not trevor, vanessa, lorne, wade or rene, which is how four of the six
+# names published in the 13 September brief reached print. Every addition
+# was measured against the live vendor list; the false positives it created
+# are in vendor_allowlist.txt and are counted in PR.md.
 GIVEN_NAMES = frozenset("""
 james john robert michael william david richard joseph thomas charles christopher
 daniel matthew anthony mark donald steven paul andrew joshua kenneth kevin brian
@@ -1189,11 +1194,112 @@ minh thanh hoang tuan hung linh trang mai lan phuong quang duc binh
 ewa agnieszka malgorzata krzysztof wojciech grzegorz jacek marek piotr tomasz
 zoltan attila laszlo istvan gabor tibor csaba bela ferenc katalin erzsebet
 johanna madeleine bernadette suzanne tanya marlene violette taffot
+lorne wade rene renee trevor vanessa marcel gilles yvon normand
+serge sylvain stephane florent fernand adrien armand aurele benoit clement
+edmond emile etienne fabien gaetan gaston germain gerard gilbert guillaume hugo
+jocelyn laurent lucien mathieu maurice olivier pascal patrice raoul regis remi
+roch rosaire sebastien thierry vincent yves alana amber ashley brenda carla
+carmen cheryl colleen connie corinne dana danielle darlene dawn debra dianne
+doreen dorothy elaine erin evelyn gail ginette glenda gloria heather holly
+irene jacqueline jamie janice joyce krista lana leanne lindsay lorna lynda
+lyne lynne marlene melody meredith micheline monique nadine nancy noel odette
+pamela pauline peggy penny phyllis ramona rhonda rita roberta robin rochelle
+rosemarie roxanne sandra shanna shauna shawna shelby sheri sherri sherry sonia
+sonja tammy tanya tara teresa theresa tonya tracie trina trisha valerie vera
+verna vicki vickie wanda wendy whitney yolanda yvette yvonne alvin arnold barry
+bernie blaine blair blake brad braden brady brendan brent brock bruce bryce
+byron calvin cameron carl carlton carson casey cecil cedric chad chandler chase
+chester clark claude clay clayton cliff clifford clint clyde cody colby cole
+colin conrad cooper craig curtis cyril dale dallas dalton damon dane darin
+darnell darrel darrell darren darrin darryl daryl dave dean delbert denis
+dennis derek derrick desmond devin devon dewayne dwayne dwight dylan earl eddie
+edgar edmund edwin elbert eldon elias elliot ellis elmer emerson emmett erik
+ernest errol ervin ethan eugene evan everett felix fletcher floyd forrest
+foster frank franklin fred freddie freeman gabe galen garnet garrett garry
+garth gavin gene geoffrey gerald gerry gil glen glenn gordon grady graham gregg
+gregory griffin gus guy hal hank harlan harley harold harris harrison harry
+hartley harvey hayden heath hector henry herb herbert herman hollis homer
+horace howard hubert hugh hunter ian ira irvin irving isaac isaiah ivan jack
+jackson jarrod jarvis jasper javier jay jed jeff jerald jeremiah jeremy jerome
+jerry jesse jessie jim jimmy joel joey johnnie johnny jonas jonathan jordan
+josiah jude julian julius justin kane karl keaton keith kelvin ken kendall
+kendrick kenny kent kerry kip kirby kirk kurt kyle lamar lamont lance landon
+lane larry laverne lawrence layne leland lemuel leon leonard leroy lester levi
+lewis liam lincoln lindsey lionel lloyd logan lon loren louie louis lowell
+lucas luke luther lyle lyman mack malcolm marc marcus mario marion marlin
+marlon marshall martin marty marvin mason mathias maynard mckinley mel melvin
+merle merlin merrill micah mick mickey miguel mike miles milford millard milo
+milton mitch mitchell monroe monte morgan morris morton moses murphy myles
+myron nate nathan nathaniel neal ned neil nelson newton nick noah nolan norbert
+norman norris oliver ollie omar oren orion orlando orville oscar otis otto owen
+parker pat patrick percy perry pete peter phil philip pierce preston quentin
+quincy quinn rafael ralph ramon randal randall randolph randy raul ray raymond
+reed reese reggie reginald reid reuben rex ricardo rich richie rick rickey
+ricky riley rob robbie rocco rocky rod roderick rodger rodney rogelio roger
+roland rolland roman romeo ron ronnie rory roscoe ross rowan roy royce rudolph
+rudy rufus rupert russ russell rusty ruben ryder sam sammy samuel sanford saul
+scott seamus sean seth seymour shane shannon shaun shawn sheldon sherman
+sherwood sid sidney silas simon sol solomon spencer stan stanford stanley
+stefan stewart stuart sylvester tanner ted terence terrance terrell terrence
+terry thad theo theodore thurman tim titus tobias toby tod todd tom tommy tony
+travis trent trenton trey tristan troy truman tucker turner tyler tyrone tyson
+val vance vaughn vern vernon victor vince virgil wallace wally walt walter ward
+warren waylon wayne webster weldon wendell wes wesley weston wilbert wilbur
+wiley wilfred wilfrid will willard willis wilmer wilson winston woodrow wyatt
+xavier zachary zane zeke
 """.split())
 
 # Names listed here are never suppressed. This is the correction channel for a
 # real company that the rules below match by accident.
 VENDOR_ALLOWLIST: set[str] = set()
+
+
+# Words that read as corporate ONLY in first position.
+#
+# "Le Groupe Conseil" is a company. "Dana La Fielding" is a person. Both
+# carry a French article, and CORP_WORDS holds LA, LE, LES, DES and DU, so the
+# article alone switched suppression off for the WHOLE name in any position.
+# That is what published one of the six names found in the 13 September brief.
+#
+# The company pattern puts the article first; the surname pattern puts it in
+# the middle. That position is the whole distinction and it is the only thing
+# this set changes. Measured on the live vendor list: 1 name newly withheld,
+# and no company reclassified.
+NAME_PARTICLES = frozenset("LA LE LES DES DU".split())
+
+# Titles that may sit in front of a person's given name. Stripped before the
+# given-name test and never when a title is the only token left.
+#
+# A name of the form "Chief Dana Morgan Fields" was published because every
+# rule reads token 0 and found a title there, so the given names behind it
+# were never tested.
+# Measured: 11 names newly withheld, all of them people or a practice trading
+# under one person's name.
+TITLE_WORDS = frozenset("CHIEF DR DRE MR MRS MS MME MLLE PROF REV SIR HON "
+                        "CAPT MAJ COL SGT LT CMDR".split())
+
+
+def _has_corporate_word(toks: list[str]) -> bool:
+    """True when a token marks this name as an organisation.
+
+    A NAME_PARTICLES token counts only in first position; see that set.
+    """
+    for i, t in enumerate(toks):
+        u = t.upper()
+        if u not in CORP_WORDS:
+            continue
+        if u in NAME_PARTICLES and i > 0:
+            continue
+        return True
+    return False
+
+
+def _without_titles(toks: list[str]) -> list[str]:
+    """The tokens after any leading titles. Never returns an empty list."""
+    i = 0
+    while i < len(toks) - 1 and toks[i].upper().rstrip(".") in TITLE_WORDS:
+        i += 1
+    return toks[i:]
 
 
 def _name_tokens(name: str) -> list[str]:
@@ -1249,17 +1355,18 @@ def is_individual(name: str) -> bool:
     if not n or any(ch.isdigit() for ch in n):
         return False
     toks = _name_tokens(n)
-    if not toks or any(t.upper() in CORP_WORDS for t in toks):
+    if not toks or _has_corporate_word(toks):
         return False
     if n.count(",") == 1:
         left, right = (p.strip() for p in n.split(","))
         lt, rt = _name_tokens(left), _name_tokens(right)
         if 1 <= len(lt) <= 2 and 1 <= len(rt) <= 2:
             return True
-    if "," not in n and 2 <= len(toks) <= 3:
-        if any(t.lower() in GIVEN_NAMES for t in toks):
+    core = _without_titles(toks)
+    if "," not in n and 2 <= len(core) <= 3:
+        if any(t.lower() in GIVEN_NAMES for t in core):
             return True
-    if len(toks) >= 4 and toks[0].lower() in GIVEN_NAMES:
+    if len(core) >= 4 and core[0].lower() in GIVEN_NAMES:
         return True
     return False
 
@@ -1285,11 +1392,11 @@ def is_person_shaped(name: str) -> bool:
     if not n or any(ch.isdigit() for ch in n):
         return False
     toks = _name_tokens(n)
-    if not toks or any(t.upper() in CORP_WORDS for t in toks):
+    if not toks or _has_corporate_word(toks):
         return False
     if n.count(",") == 1:
         return True
-    return 2 <= len(toks) <= 3
+    return 2 <= len(_without_titles(toks)) <= 3
 
 
 # --------------------------------------------------------------------------

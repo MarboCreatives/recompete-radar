@@ -16,3 +16,13 @@
 # and none of "chabot", "grant" or "thornton" is a corporate word. Verified
 # against the live vendor list as the only false positive that rule produces.
 RAYMOND CHABOT GRANT THORNTON
+
+# Added 14 September 2026 with the individual-name fixes. Each is a company the
+# widened given-name test now reads as a person. Measured, not guessed: these
+# three were the only unambiguous firms among the 172 names the change newly
+# withheld. Names that could be a person trading under their own name were left
+# withheld, because withholding a company costs a reader one label and missing a
+# person exposes them.
+STEWART MCKELVEY
+RENE BLAIS LTE
+rene blaise lite
