@@ -281,6 +281,32 @@ def self_test() -> int:
         elif build_site.PERSON_LABEL not in out:
             fails.append(f"5b. {fn.__name__} dropped the withheld label")
 
+    # 5c. The three name shapes that reached subscribers in the brief for week
+    # ending 13 September 2026. Test 5b cannot catch a rule that is too NARROW,
+    # because it uses a shape the rule already handled. These are the shapes it
+    # did not:
+    #
+    #   a title in front of the given name   -> every rule read token 0 only
+    #   a French article inside the surname  -> CORP_WORDS switched the whole
+    #                                           name off in any position
+    #   a given name absent from GIVEN_NAMES -> the list was arbitrary
+    #
+    # Every name below is invented. The real names are personal data and do not
+    # belong in a public repository, so each fault is reproduced by its shape.
+    for label, vendor in (("title prefix", "Chief Dana Morgan Fields"),
+                          ("article inside a surname", "Dana La Fielding"),
+                          ("given name added 2026-09-14", "Trevor Fielding")):
+        row = [mk(365, vendor_name=vendor)]
+        build_site.VENDOR_ALLOWLIST = set()
+        build_site.suppress_individuals(row)
+        for fn in (render_text, render_html):
+            out = fn(crossings(row, today), today, "B", "A", "https://x")
+            if vendor.split()[-1] in out:
+                fails.append(f"5c. {fn.__name__} leaked a {label} name")
+            elif build_site.PERSON_LABEL not in out:
+                fails.append(f"5c. {fn.__name__} dropped the withheld label "
+                             f"for a {label} name")
+
     # 6. HTML escaping of hostile vendor names
     xss = [mk(365, vendor_name='<script>alert(1)</script>')]
     out = render_html(crossings(xss, today), today, "B", "A", "https://x")
