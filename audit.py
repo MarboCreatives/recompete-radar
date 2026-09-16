@@ -14,6 +14,7 @@ Exit code 0 = all checks passed, 1 = at least one failure.
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import os
 import re
@@ -56,6 +57,13 @@ def money_to_float(s: str) -> float:
         return float("nan")
 
 
+def _norm(name) -> str:
+    """Case, accent and spacing folded, for comparing a name across files."""
+    t = unicodedata.normalize("NFKD", str(name or ""))
+    t = "".join(ch for ch in t if not unicodedata.combining(ch))
+    return " ".join(t.lower().split())
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", required=True)
@@ -79,7 +87,14 @@ def main() -> int:
     rows = json.load(open(a.input, encoding="utf-8"))
 
     build_site.VENDOR_ALLOWLIST = build_site.load_vendor_allowlist("vendor_allowlist.txt")
+    # The names as the source publishes them, taken BEFORE suppression, so the
+    # search checks below can tell whether a withheld name reached a public
+    # index file. Held in memory only and never printed: this set IS the
+    # personal information.
+    _names_before = [_norm(r.get("vendor_name")) for r in rows]
     withheld = build_site.suppress_individuals(rows)
+    withheld_names = {before for before, r in zip(_names_before, rows)
+                      if before and r.get("vendor_name") == build_site.PERSON_LABEL}
     site = a.site
 
     # ---- recompute the truth independently -------------------------------
@@ -913,6 +928,169 @@ def main() -> int:
     check("the withheld-name label this audit looks for is the one the site prints",
           build_site.PERSON_LABEL == PERSON_LABEL,
           f"audit expects {PERSON_LABEL!r}, build_site prints {build_site.PERSON_LABEL!r}")
+
+    # ---- search ------------------------------------------------------------
+    # The header box searches search-index.json and search.html searches
+    # search-contracts.json. Both are public files on a public site, so the
+    # checks that matter most here are the privacy ones.
+    def _load_search(name):
+        path = os.path.join(site, name)
+        if not os.path.exists(path):
+            return None, 0
+        raw = open(path, "rb").read()
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except ValueError:
+            data = None
+        return (data if isinstance(data, dict) else None), len(gzip.compress(raw, 9))
+
+    s_idx, s_ents_gz = _load_search("search-index.json")
+    s_con, s_cons_gz = _load_search("search-contracts.json")
+    s_js = os.path.exists(os.path.join(site, "search.js"))
+
+    def _pairs(x):
+        return isinstance(x, list) and all(
+            isinstance(e, list) and len(e) == 2 and all(isinstance(v, str) for v in e) for e in x)
+
+    s_ents = (s_idx or {}).get("entities")
+    ents_ok = isinstance(s_ents, list) and all(
+        isinstance(e, list) and len(e) == 4 and e[0] in ("d", "i", "c", "p")
+        and isinstance(e[1], str) and isinstance(e[2], str) and isinstance(e[3], int)
+        for e in s_ents)
+    s_sup, s_dep, s_cat = ((s_con or {}).get(k) for k in ("suppliers", "departments", "categories"))
+    s_cons = (s_con or {}).get("contracts")
+    cons_ok = (_pairs(s_sup) and _pairs(s_dep) and _pairs(s_cat) and isinstance(s_cons, list)
+               and all(isinstance(c, list) and len(c) == 8
+                       and isinstance(c[1], int) and 0 <= c[1] < len(s_sup)
+                       and isinstance(c[2], int) and 0 <= c[2] < len(s_dep)
+                       and isinstance(c[3], int) and 0 <= c[3] < len(s_cat)
+                       for c in s_cons))
+    check("search script and both search files are published and well formed",
+          s_js and ents_ok and cons_ok,
+          f"search.js {'present' if s_js else 'MISSING'}, "
+          f"search-index.json {'ok' if ents_ok else 'MISSING OR MALFORMED'}, "
+          f"search-contracts.json {'ok' if cons_ok else 'MISSING OR MALFORMED'}")
+    if not ents_ok:
+        s_ents = []
+    if not cons_ok:
+        s_sup, s_dep, s_cat, s_cons = [], [], [], []
+    # Each contract with its supplier, department and category resolved.
+    s_full = [(c[0], s_sup[c[1]], s_dep[c[2]], s_cat[c[3]], c[4], c[5], c[6], c[7])
+              for c in s_cons]
+
+    # Gzipped size is what a reader downloads. The entity file loads from every
+    # page, so its ceiling is the one that protects the site. Live data on
+    # 15 September 2026: entities 48 KB, contracts about 620 KB.
+    ENTITY_GZ_MAX = 90_000
+    CONTRACT_GZ_MAX = 1_000_000
+    check("search files stay under their size ceilings",
+          s_ents_gz <= ENTITY_GZ_MAX and s_cons_gz <= CONTRACT_GZ_MAX,
+          f"entities {s_ents_gz/1000:,.0f} KB gzipped (max {ENTITY_GZ_MAX/1000:,.0f}), "
+          f"contracts {s_cons_gz/1000:,.0f} KB gzipped (max {CONTRACT_GZ_MAX/1000:,.0f})")
+
+    # THE TRAP. Every private person the pages withhold would become searchable
+    # if either file were built from rows read before suppress_individuals ran.
+    # The oracle is the set of names as the source published them, before
+    # suppression, not is_individual on the file's own contents: a file built
+    # from unsuppressed rows would carry exactly those names. Every text field
+    # in both files is tested, not only the supplier list. Counts only.
+    s_texts = ([e[1] for e in s_ents] + [e[0] for e in s_sup + s_dep + s_cat]
+               + [str(v) for c in s_cons for v in (c[0], c[7])])
+    s_leaks = sum(1 for t in s_texts if _norm(t) in withheld_names)
+    s_shaped = sum(1 for n in [e[1] for e in s_ents if e[0] == "i"] + [e[0] for e in s_sup]
+                   if n != build_site.PERSON_LABEL and build_site.is_individual(n)
+                   and build_site._norm_name(n) not in build_site.VENDOR_ALLOWLIST)
+    check("no withheld individual appears in either search file",
+          s_leaks == 0 and s_shaped == 0 and bool(withheld_names),
+          (f"{len(withheld_names):,} withheld names tested against {len(s_texts):,} strings"
+           if s_leaks == 0 and s_shaped == 0 and withheld_names else
+           "no withheld names to test against" if not withheld_names else
+           f"{s_leaks} withheld name(s) and {s_shaped} person-shaped supplier(s) found"))
+
+    # The description is the one free-text field. Every value must be exactly
+    # what the pages print for that contract, scope_text() of its own comment,
+    # so a comment the name scan withholds on the pages is withheld here too.
+    # Re-scanned as well, from what reached the file. Counts only.
+    _scope_by = defaultdict(set)
+    for r in live:
+        _scope_by[(str(r.get("reference_number") or ""), r.get("buyer_org") or "")].add(
+            build_site.scope_text(r.get("comments_en")) or "")
+    s_scope_bad = sum(1 for f in s_full
+                      if (f[7] and build_site.scope_text(f[7]) is None)
+                      or f[7] not in _scope_by.get((f[0], f[2][0]), set()))
+    s_scope_n = sum(1 for f in s_full if f[7])
+    check("every description in the contract search file is the text the pages print",
+          s_scope_bad == 0 and bool(s_full),
+          f"{s_scope_bad} of {len(s_full):,} do not match" if s_scope_bad or not s_full
+          else f"{s_scope_n:,} descriptions")
+
+    # Every link in both files must land somewhere real. A fragment must name
+    # an id that exists in the page it points at.
+    _ids_cache: dict = {}
+
+    def _resolves(href):
+        path, _hash, frag = href.partition("#")
+        full = os.path.normpath(os.path.join(site, path))
+        if not path or not os.path.isfile(full) or not full.startswith(os.path.normpath(site)):
+            return False
+        if not frag:
+            return True
+        if full not in _ids_cache:
+            _ids_cache[full] = set(re.findall(r'id="([^"]+)"', open(full, encoding="utf-8").read()))
+        return frag in _ids_cache[full]
+
+    s_hrefs = [e[2] for e in s_ents] + [e[1] for e in s_sup + s_dep + s_cat if e[1]]
+    s_bad = sum(1 for h in s_hrefs if not _resolves(h))
+    check("every link in the search files resolves", s_bad == 0 and bool(s_ents),
+          f"{s_bad} of {len(s_hrefs):,} do not resolve" if s_bad or not s_ents
+          else f"{len(s_hrefs):,} links")
+
+    # The entity file must offer exactly the entities that have a page: every
+    # named link on the four folder indexes, and nothing else. Read from the
+    # HTML, so a group the file drops or invents shows up as a disagreement.
+    s_miss = []
+    for code, folder in (("d", "department"), ("i", "incumbent"),
+                         ("c", "category"), ("p", "province")):
+        on_pages = set()
+        d = os.path.join(site, folder)
+        for f in sorted(os.listdir(d)) if os.path.isdir(d) else []:
+            if f.startswith("index"):
+                src = open(os.path.join(d, f), encoding="utf-8").read()
+                on_pages |= {f"{folder}/{h}" for h in re.findall(r'<li><a href="([^"]+)"', src)}
+        in_file = [e[2] for e in s_ents if e[0] == code]
+        if set(in_file) != on_pages or len(in_file) != len(set(in_file)):
+            s_miss.append(f"{folder}: file {len(in_file)}, pages {len(on_pages)}")
+    check("the search index offers exactly the entities that have a page",
+          not s_miss and bool(s_ents),
+          "; ".join(s_miss) if s_miss else f"{len(s_ents):,} entities")
+
+    # The contract file must be the live contracts as the data names them after
+    # suppression: reference, supplier, department, value, days and org code.
+    # The org code is what search.js builds the source-record link from.
+    _want = Counter((str(r.get("reference_number") or ""), r.get("vendor_name") or "",
+                     r.get("buyer_org") or "", round(r.get("contract_value") or 0),
+                     r.get("days_to_expiry"), str(r.get("buyer_org_code") or "").strip())
+                    for r in live)
+    _have = Counter((f[0], f[1][0], f[2][0], f[4], f[5], f[6]) for f in s_full)
+    check("the contract search file holds every live contract as the data names it",
+          _want == _have,
+          f"{sum(_have.values()):,} rows" if _want == _have else
+          f"file {sum(_have.values()):,} rows, data {len(live):,}; "
+          f"{sum((_want - _have).values()):,} missing, {sum((_have - _want).values()):,} unexpected")
+
+    # The header box on every page, with its script, pointing at the site root
+    # from wherever that page sits.
+    s_nobox = []
+    for f in html:
+        rel = os.path.relpath(f, site).replace(os.sep, "/")
+        root = "../" * rel.count("/")
+        src = open(f, encoding="utf-8").read()
+        if (f'id="rr-search" data-root="{root}"' not in src
+                or f'<script src="{root}search.js" defer></script>' not in src):
+            s_nobox.append(rel)
+    check("every page carries the search box and its script", not s_nobox,
+          f"{len(s_nobox)} of {len(html)} pages missing it"
+          + (f" e.g. {s_nobox[:3]}" if s_nobox else ""))
 
     # ---- headline numbers on the landing page must match the data ---------
     idx = os.path.join(site, "index.html")
