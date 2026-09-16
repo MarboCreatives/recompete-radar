@@ -1943,7 +1943,10 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
     #
     # A contract row, by position:
     #   reference number, supplier index, department index, category index,
-    #   value, days to expiry, buyer org code, description of the work.
+    #   value, days to expiry, buyer org code, description of the work,
+    #   bidder count (or null), competition density label (or "").
+    # The last two are the Bidders and Last time columns every other table
+    # shows, so the search results can be sorted the same way.
     # A lookup entry is [text as the table prints it, link or ""].
     #
     # The org code is stored instead of the source-record URL. search.js builds
@@ -1974,6 +1977,8 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
             r.get("days_to_expiry"),
             str(r.get("buyer_org_code") or "").strip(),
             scope_text(r.get("comments_en")) or "",
+            r.get("number_of_bids"),
+            r.get("competition_density") or "",
         ])
 
     def write_search_file(name: str, lists: dict) -> None:

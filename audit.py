@@ -960,7 +960,7 @@ def main() -> int:
     s_sup, s_dep, s_cat = ((s_con or {}).get(k) for k in ("suppliers", "departments", "categories"))
     s_cons = (s_con or {}).get("contracts")
     cons_ok = (_pairs(s_sup) and _pairs(s_dep) and _pairs(s_cat) and isinstance(s_cons, list)
-               and all(isinstance(c, list) and len(c) == 8
+               and all(isinstance(c, list) and len(c) == 10
                        and isinstance(c[1], int) and 0 <= c[1] < len(s_sup)
                        and isinstance(c[2], int) and 0 <= c[2] < len(s_dep)
                        and isinstance(c[3], int) and 0 <= c[3] < len(s_cat)
@@ -975,7 +975,7 @@ def main() -> int:
     if not cons_ok:
         s_sup, s_dep, s_cat, s_cons = [], [], [], []
     # Each contract with its supplier, department and category resolved.
-    s_full = [(c[0], s_sup[c[1]], s_dep[c[2]], s_cat[c[3]], c[4], c[5], c[6], c[7])
+    s_full = [(c[0], s_sup[c[1]], s_dep[c[2]], s_cat[c[3]], c[4], c[5], c[6], c[7], c[8], c[9])
               for c in s_cons]
 
     # Gzipped size is what a reader downloads. The entity file loads from every
@@ -1065,13 +1065,15 @@ def main() -> int:
           "; ".join(s_miss) if s_miss else f"{len(s_ents):,} entities")
 
     # The contract file must be the live contracts as the data names them after
-    # suppression: reference, supplier, department, value, days and org code.
-    # The org code is what search.js builds the source-record link from.
+    # suppression: reference, supplier, department, value, days, org code,
+    # bidder count and competition density. The org code is what search.js
+    # builds the source-record link from; the last two are sort columns.
     _want = Counter((str(r.get("reference_number") or ""), r.get("vendor_name") or "",
                      r.get("buyer_org") or "", round(r.get("contract_value") or 0),
-                     r.get("days_to_expiry"), str(r.get("buyer_org_code") or "").strip())
+                     r.get("days_to_expiry"), str(r.get("buyer_org_code") or "").strip(),
+                     r.get("number_of_bids"), r.get("competition_density") or "")
                     for r in live)
-    _have = Counter((f[0], f[1][0], f[2][0], f[4], f[5], f[6]) for f in s_full)
+    _have = Counter((f[0], f[1][0], f[2][0], f[4], f[5], f[6], f[8], f[9]) for f in s_full)
     check("the contract search file holds every live contract as the data names it",
           _want == _have,
           f"{sum(_have.values()):,} rows" if _want == _have else
