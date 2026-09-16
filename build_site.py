@@ -595,6 +595,9 @@ color:#06121f;font-weight:600;font-size:14px;cursor:pointer;white-space:nowrap}
    page, and :target flashes the row so the reader can see where they landed
    in a list of a thousand. */
 a.ix{border-bottom:1px dotted #3d6f9e}
+/* A small supplier or category on an index page, linked into the search. */
+li.d a.sx{color:inherit;border-bottom:1px dotted #3d6f9e}
+li.d a.sx:hover{color:var(--ac);text-decoration:none}
 li.d:target{background:#1d2836;outline:2px solid var(--ac);border-radius:5px;
 padding:2px 6px;color:var(--tx)}
 /* Second row, full width inside the flex form. Deliberately quieter than the
@@ -657,6 +660,28 @@ box-shadow:0 8px 24px rgba(0,0,0,.45)}
 .srch-page{max-width:640px;margin:8px 0 6px}
 .srch-status{margin:10px 0 4px}
 @media(max-width:560px){.srch-t{display:none}}
+/* Filters on the search page. Drawn by search.js, so they exist only where
+   the search itself works. Two columns on a wide screen, one on a phone. */
+.flt{background:var(--pn);border:1px solid var(--ln);border-radius:10px;padding:12px 14px;margin:10px 0 4px}
+.flt-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px 18px;align-items:start}
+.flt-f{display:flex;flex-direction:column;gap:4px;min-width:0}
+.flt-l{color:var(--dm);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em}
+.flt select,.flt input[type=number],.flt input[type=search]{width:100%;min-width:0;padding:6px 8px;border-radius:6px;
+border:1px solid var(--ln);background:var(--bg);color:var(--tx);font-size:13px}
+.flt-pair{display:flex;gap:6px;align-items:center}
+.flt-pair input{flex:1 1 0}
+.flt-pick{border:1px solid var(--ln);border-radius:6px;padding:6px 8px;background:var(--bg);min-width:0}
+.flt-pick summary{cursor:pointer;font-size:13px}
+.flt-pick input[type=search]{margin:6px 0}
+.flt-list{max-height:220px;overflow-y:auto}
+.flt-list li{display:block;border:0;padding:2px 0;font-size:12.5px}
+.flt-list label{cursor:pointer}
+.flt-note{color:var(--dm);font-size:11px;line-height:1.45}
+.flt-foot{margin-top:10px}
+.flt-clear,.flt-x{background:none;border:1px solid var(--ln);color:var(--dm);border-radius:6px;
+padding:4px 10px;font-size:12px;cursor:pointer}
+.flt-clear:hover,.flt-x:hover{border-color:var(--ac);color:var(--ac)}
+.flt-chips{margin:8px 0 0}
 """
 
 
@@ -926,6 +951,11 @@ def contract_table(rows: list[dict], show: tuple[str, ...] = ("dept", "cat"),
         if c.get("standing_offer_number"):
             flags += ('<span class="flag" title="Called up against an existing '
                       'standing offer, not tendered separately">Standing offer</span>')
+        if is_resource_based(c.get("comments_en")):
+            flags += (f'<span class="flag" title="The description names a staffing '
+                      f'arrangement (TBIPS, TSPS, ProServices or a role level). Most '
+                      f'staffing contracts do not say so and are not marked.">'
+                      f'{RESOURCE_LABEL}</span>')
         flags_html = f"<br>{flags}" if flags else ""
         cells = [
             f'<td{sort_key(days)}>{bucket_pill(c.get("expiry_bucket"))} '
@@ -942,8 +972,12 @@ def contract_table(rows: list[dict], show: tuple[str, ...] = ("dept", "cat"),
             # plain text would put "#" in the Category column of every
             # department and incumbent page that carries these rows.
             raw_cat = (c.get("category_name") or "").strip()
+            # The category's own heading, not this row's spelling of it, so a
+            # category the source writes three ways reads the same in every
+            # table and matches the page the link opens.
+            cat_name = CATEGORY_DISPLAY.get(c.get("category_key") or "") or raw_cat
             cat_txt = ("—" if is_placeholder_category(raw_cat)
-                       else clip(raw_cat or c.get("commodity_code") or "", 38))
+                       else clip(cat_name or c.get("commodity_code") or "", 38))
             cells.append(f'<td class="d">{entity_link("category", c.get("category_key"), cat_txt, depth)}</td>')
         cells.append(f'<td class="n d"{sort_key(bids)}>'
                      f'{bids if bids is not None else "—"}</td>')
@@ -1053,7 +1087,86 @@ def add_category_key(rows: list[dict]) -> None:
         if is_placeholder_category(name):
             r["category_key"] = ""
             continue
-        r["category_key"] = re.sub(r"\s+", " ", name).lower() or (r.get("commodity_code") or "")
+        r["category_key"] = category_key_of(name) or (r.get("commodity_code") or "")
+
+
+# Sep 2026: a tester said the categories overlap, and they did. After case and
+# spacing, 227 names were left, and many were one category written two ways.
+#
+# Two layers, applied in this order and nowhere else:
+#   1. category_norm() - mechanical, no judgement: a leading commodity code
+#      ("0491 - "), spacing around dashes and slashes, a comma before "and".
+#   2. category_merges.txt - a list Jon reviewed by hand. Cut-off names and
+#      short forms that mean the same category. A pair that only LOOKS alike
+#      ("Other equipment" / "Other equipment and parts") is not in it.
+# Page filenames come from the display name, not this key, so only a category
+# that is merged into another changes its address.
+CATEGORY_MERGES: dict[str, str] = {}
+# key -> the name the category's page is headed with. Filled in build() from
+# the grouped rows before any table is rendered.
+CATEGORY_DISPLAY: dict[str, str] = {}
+
+
+def category_norm(name: str) -> str:
+    n = re.sub(r"\s+", " ", (name or "")).strip().lower()
+    n = re.sub(r"^\d{3,5}\s*[-\u2013\u2014:]\s*", "", n)
+    n = re.sub(r"\s*[-\u2013\u2014]\s*", "-", n)
+    n = re.sub(r"\s*/\s*", "/", n)
+    n = re.sub(r",\s*and\b", " and", n)
+    return re.sub(r"\s+", " ", n).strip()
+
+
+def load_category_merges(path: str) -> dict[str, str]:
+    """`from => to`, one per line, # starts a comment. Both sides are passed
+    through category_norm, so the file can be written in the source's own
+    capitalisation. A chain or a loop is refused rather than guessed at."""
+    out: dict[str, str] = {}
+    if not path or not os.path.exists(path):
+        return out
+    with open(path, encoding="utf-8") as fh:
+        for i, line in enumerate(fh, 1):
+            line = line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            if "=>" not in line:
+                raise ValueError(f"{path}:{i}: expected 'from => to'")
+            a, b = (category_norm(x) for x in line.split("=>", 1))
+            if not a or not b or a == b:
+                raise ValueError(f"{path}:{i}: empty or self merge")
+            if a in out:
+                raise ValueError(f"{path}:{i}: {a!r} is merged twice")
+            out[a] = b
+    for a, b in out.items():
+        if b in out:
+            raise ValueError(f"{path}: {a!r} merges into {b!r}, which is itself merged")
+    return out
+
+
+def category_key_of(name: str) -> str:
+    n = category_norm(name)
+    return CATEGORY_MERGES.get(n, n)
+
+
+# --- Resource-based contracts ---------------------------------------------
+# A tester asked to keep IT staffing apart from IT services. The source has no
+# field for it. Measured on the real data, 16 Sep 2026: of 1,600 IT consultant
+# contracts, the description names the staffing arrangement outright in about
+# 160 (TBIPS, TSPS, SBIPS, ProServices, or a role with a level), and every one
+# of those matches was a staffing arrangement. The other ~1,440 carry template
+# text or nothing and cannot be told apart. So this marks only what the buyer
+# wrote down, and the site says plainly that most such contracts are unmarked.
+RESOURCE_LABEL = "Resource-based"
+_RESOURCE_VEHICLE = re.compile(
+    r"\b(TBIPS|TSPS|SBIPS|ProServices)\b|task-based informatics professional services", re.I)
+_RESOURCE_LEVEL = re.compile(r"\b(level|niveau)\s?[123]\b", re.I)
+
+
+def is_resource_based(comment: Optional[str]) -> bool:
+    """True when the buyer's description names a staffing vehicle or a role
+    level. Reads the raw comment, but returns only a yes or no: none of the
+    text reaches the page through this function."""
+    t = comment or ""
+    return bool(_RESOURCE_VEHICLE.search(t) or _RESOURCE_LEVEL.search(t))
 
 
 # Postal-code prefix -> province. The published field carries only the vendor's
@@ -1588,6 +1701,8 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
     depts = group(live, "buyer_org")
     vendors = group(live, "vendor_key", "vendor_name")
     cats = group(live, "category_key", "category_name")
+    global CATEGORY_DISPLAY
+    CATEGORY_DISPLAY = {k: g["display"] for k, g in cats.items()}
     provs = group(live, "province_key", "province_name")
 
     counts = {"0-6mo": 0, "6-12mo": 0, "12-24mo": 0, "24mo+": 0}
@@ -1754,6 +1869,32 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
     write_group_pages(cats, "category", "Category", ("dept",))
     write_group_pages(provs, "province", "Supplier province", ("dept", "cat"))
 
+    def grey_name(folder: str, key: str, g: dict) -> str:
+        """A below-threshold name on an index page, linked to the contract
+        search for exactly that supplier or category.
+
+        A tester expected good prospects among these names and could not click
+        them. They get a link into search, not a page of their own, so the
+        thin-content rule is untouched.
+
+        PRIVACY: a supplier name that could belong to a person is NOT linked.
+        The link carries the supplier key in its address, and a key is the
+        name. is_person_shaped is the same looser test that already keeps
+        these names out of URL fragments. audit.py checks both halves.
+        """
+        shown = clip(g["display"], 52)
+        text = esc(shown)
+        param = {"incumbent": "vendor", "category": "cat"}.get(folder)
+        if not param or not key:
+            return text
+        # Both the full name and the clipped text a reader sees. Clipping can
+        # cut off the one word that marks a business, leaving a name that
+        # reads as a person; found by the audit on the real data.
+        if folder == "incumbent" and (is_person_shaped(g["display"]) or is_person_shaped(shown)):
+            return text
+        return (f'<a class="sx" href="../search.html?{param}='
+                f'{esc(urllib.parse.quote(key, safe=""))}">{text}</a>')
+
     # ---- index pages (keeps small groups crawlable and internally linked)
     def write_index(groups: dict[str, dict], small: list, folder: str, label: str) -> None:
         """Index page(s). Every group appears somewhere — groups below the
@@ -1778,7 +1919,7 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
             rest = "".join(
                 (f'<li class="d" id="{esc(ANCHORS[folder][k].split("#")[-1])}">'
                  if k in ANCHORS[folder] else '<li class="d">')
-                + f'{esc(clip(g["display"], 52))} — {money(g["value"])} · {g["count"]}</li>'
+                + f'{grey_name(folder, k, g)} — {money(g["value"])} · {g["count"]}</li>'
                 for k, g in chunk)
             nav = ""
             if total_pages > 1:
@@ -1944,10 +2085,16 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
     # A contract row, by position:
     #   reference number, supplier index, department index, category index,
     #   value, days to expiry, buyer org code, description of the work,
-    #   bidder count (or null), competition density label (or "").
-    # The last two are the Bidders and Last time columns every other table
-    # shows, so the search results can be sorted the same way.
-    # A lookup entry is [text as the table prints it, link or ""].
+    #   bidder count (or null), competition density label (or ""),
+    #   supplier country code (CA, US, ...; "" when blank), resource-based (1 or 0).
+    # Bidders and Last time are the columns every other table shows, so the
+    # results sort the same way. Country and resource-based are filters.
+    # Lookup entries:
+    #   suppliers    [text as the table prints it, link or "", supplier key]
+    #   departments  [bilingual name, link or ""]
+    #   categories   [category name as its page is headed, link or "", key]
+    # A category is stored once per KEY, not once per spelling, so the filter
+    # offers one entry for a category the source writes three ways.
     #
     # The org code is stored instead of the source-record URL. search.js builds
     # the same URL source_record_url() does, and audit.py checks the code
@@ -1959,26 +2106,28 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
     # raw comments_en in this file.
     lookups: dict[str, dict[tuple, int]] = {"suppliers": {}, "departments": {}, "categories": {}}
 
-    def ix(table: str, text: str, href: str) -> int:
+    def ix(table: str, *entry: str) -> int:
         t = lookups[table]
-        return t.setdefault((text, href), len(t))
+        return t.setdefault(tuple(entry), len(t))
 
     contract_rows = []
     for r in live:
-        raw_cat = (r.get("category_name") or "").strip()
-        cat_txt = ("" if is_placeholder_category(raw_cat)
-                   else " ".join((raw_cat or r.get("commodity_code") or "").split()))
+        ckey = r.get("category_key") or ""
         contract_rows.append([
             str(r.get("reference_number") or ""),
-            ix("suppliers", r.get("vendor_name") or "", entity_href("incumbent", r.get("vendor_key"))),
+            ix("suppliers", r.get("vendor_name") or "", entity_href("incumbent", r.get("vendor_key")),
+               r.get("vendor_key") or ""),
             ix("departments", r.get("buyer_org") or "", entity_href("department", r.get("buyer_org"))),
-            ix("categories", cat_txt, entity_href("category", r.get("category_key")) if cat_txt else ""),
+            ix("categories", " ".join(cats[ckey]["display"].split()) if ckey else "",
+               entity_href("category", ckey) if ckey else "", ckey),
             round(r.get("contract_value") or 0),
             r.get("days_to_expiry"),
             str(r.get("buyer_org_code") or "").strip(),
             scope_text(r.get("comments_en")) or "",
             r.get("number_of_bids"),
             r.get("competition_density") or "",
+            str(r.get("country_of_vendor") or "").strip().upper(),
+            1 if is_resource_based(r.get("comments_en")) else 0,
         ])
 
     def write_search_file(name: str, lists: dict) -> None:
@@ -2006,7 +2155,8 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
         '<div class="crumb"><a href="index.html">Home</a> › Search</div>'
         "<h2>Search contracts</h2>"
         f'<p class="sb">Search all {len(live):,} live contracts by supplier, department, '
-        'category, reference number or words in the description of the work. The search '
+        'category, reference number or words in the description of the work, and narrow '
+        'them with the filters. The search '
         'runs in your browser; nothing you '
         'type is sent anywhere.</p>'
         '<div id="rr-contracts" data-root=""></div>'
@@ -2087,6 +2237,9 @@ def main() -> int:
                     help="File of vendor names that must never be treated as\n"
                          "individual people. One per line, # starts a comment.\n"
                          "Missing file is fine.")
+    ap.add_argument("--category-merges", default=os.path.join(
+                        os.path.dirname(os.path.abspath(__file__)), "category_merges.txt"),
+                    help="Reviewed category merges, 'from => to' per line.")
     ap.add_argument("--google-verification", default="",
                     help="Google Search Console token (the content=\"...\" value\n"
                          "only, not the whole meta tag).")
@@ -2181,6 +2334,9 @@ def main() -> int:
 
     global VENDOR_ALLOWLIST
     VENDOR_ALLOWLIST = load_vendor_allowlist(args.vendor_allowlist)
+
+    global CATEGORY_MERGES
+    CATEGORY_MERGES = load_category_merges(args.category_merges)
 
     rows = json.load(open(args.input, encoding="utf-8"))
     print(f"loaded {len(rows):,} contracts from {args.input}")

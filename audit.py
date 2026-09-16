@@ -118,11 +118,41 @@ def main() -> int:
             return True
         return re.sub(r"[^a-z]", "", n.lower()) in PLACEHOLDER_CATS
 
+    # Category merges, Sep 2026. The mechanical part is written out again here,
+    # like the rest of this file. The reviewed list is DATA, read from the same
+    # file the builder reads, and parsed here independently.
+    def cat_norm(name):
+        n = re.sub(r"\s+", " ", (name or "")).strip().lower()
+        n = re.sub(r"^\d{3,5}\s*[-\u2013\u2014:]\s*", "", n)
+        n = re.sub(r"\s*[-\u2013\u2014]\s*", "-", n)
+        n = re.sub(r"\s*/\s*", "/", n)
+        n = re.sub(r",\s*and\b", " and", n)
+        return re.sub(r"\s+", " ", n).strip()
+
+    CAT_MERGES, merge_problems = {}, []
+    _mf = os.path.join(os.path.dirname(os.path.abspath(__file__)), "category_merges.txt")
+    if os.path.exists(_mf):
+        for i, line in enumerate(open(_mf, encoding="utf-8"), 1):
+            line = line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            if "=>" not in line:
+                merge_problems.append(f"line {i} has no =>")
+                continue
+            src_n, dst_n = (cat_norm(x) for x in line.split("=>", 1))
+            if not src_n or not dst_n or src_n == dst_n or src_n in CAT_MERGES:
+                merge_problems.append(f"line {i} is empty, a self merge or a repeat")
+                continue
+            CAT_MERGES[src_n] = dst_n
+    merge_problems += [f"{x!r} merges into {y!r}, which is itself merged"
+                       for x, y in CAT_MERGES.items() if y in CAT_MERGES]
+
     def norm_cat(r):
         name = (r.get("category_name") or "").strip()
         if placeholder_cat(name):
             return ""
-        return re.sub(r"\s+", " ", name).lower() or (r.get("commodity_code") or "")
+        n = cat_norm(name)
+        return CAT_MERGES.get(n, n) or (r.get("commodity_code") or "")
 
     # Province is derived from the supplier's forward sortation area. Written out
     # again here rather than imported, like the rest of this file. The shape test
@@ -377,8 +407,11 @@ def main() -> int:
             # This must stay attribute-tolerant: a pattern that silently stops
             # matching turns the most important check in this file into a
             # guaranteed pass over an empty list.
-            out += [m.split("\u2014")[0].strip()
-                    for m in re.findall(r'<li class="d"[^>]*>([^<]+)</li>', src)]
+            # The row may now hold a link into search around the name. Strip
+            # tags before reading, so a linked name is still tested; a pattern
+            # that skipped them would pass over exactly the rows most exposed.
+            out += [re.sub(r"<[^>]+>", "", m).split("\u2014")[0].strip()
+                    for m in re.findall(r'<li class="d"[^>]*>(.*?)</li>', src)]
         return [_unescape(n) for n in out]
 
     # Two corrections to what this check tests. Neither relaxes it — both stop
@@ -948,9 +981,9 @@ def main() -> int:
     s_con, s_cons_gz = _load_search("search-contracts.json")
     s_js = os.path.exists(os.path.join(site, "search.js"))
 
-    def _pairs(x):
+    def _pairs(x, size=2):
         return isinstance(x, list) and all(
-            isinstance(e, list) and len(e) == 2 and all(isinstance(v, str) for v in e) for e in x)
+            isinstance(e, list) and len(e) == size and all(isinstance(v, str) for v in e) for e in x)
 
     s_ents = (s_idx or {}).get("entities")
     ents_ok = isinstance(s_ents, list) and all(
@@ -959,8 +992,9 @@ def main() -> int:
         for e in s_ents)
     s_sup, s_dep, s_cat = ((s_con or {}).get(k) for k in ("suppliers", "departments", "categories"))
     s_cons = (s_con or {}).get("contracts")
-    cons_ok = (_pairs(s_sup) and _pairs(s_dep) and _pairs(s_cat) and isinstance(s_cons, list)
-               and all(isinstance(c, list) and len(c) == 10
+    cons_ok = (_pairs(s_sup, 3) and _pairs(s_dep) and _pairs(s_cat, 3) and isinstance(s_cons, list)
+               and all(isinstance(c, list) and len(c) == 12
+                       and c[11] in (0, 1) and isinstance(c[10], str)
                        and isinstance(c[1], int) and 0 <= c[1] < len(s_sup)
                        and isinstance(c[2], int) and 0 <= c[2] < len(s_dep)
                        and isinstance(c[3], int) and 0 <= c[3] < len(s_cat)
@@ -975,7 +1009,8 @@ def main() -> int:
     if not cons_ok:
         s_sup, s_dep, s_cat, s_cons = [], [], [], []
     # Each contract with its supplier, department and category resolved.
-    s_full = [(c[0], s_sup[c[1]], s_dep[c[2]], s_cat[c[3]], c[4], c[5], c[6], c[7], c[8], c[9])
+    s_full = [(c[0], s_sup[c[1]], s_dep[c[2]], s_cat[c[3]], c[4], c[5], c[6], c[7], c[8], c[9],
+               c[10], c[11])
               for c in s_cons]
 
     # Gzipped size is what a reader downloads. The entity file loads from every
@@ -1067,18 +1102,105 @@ def main() -> int:
     # The contract file must be the live contracts as the data names them after
     # suppression: reference, supplier, department, value, days, org code,
     # bidder count and competition density. The org code is what search.js
-    # builds the source-record link from; the last two are sort columns.
+    # builds the source-record link from; bidders and density are sort
+    # columns. Sep 2026 adds the four the filters read: supplier key, category
+    # key (after merges, computed by this file), supplier country and the
+    # resource-based flag.
     _want = Counter((str(r.get("reference_number") or ""), r.get("vendor_name") or "",
                      r.get("buyer_org") or "", round(r.get("contract_value") or 0),
                      r.get("days_to_expiry"), str(r.get("buyer_org_code") or "").strip(),
-                     r.get("number_of_bids"), r.get("competition_density") or "")
+                     r.get("number_of_bids"), r.get("competition_density") or "",
+                     r.get("vendor_key") or "", norm_cat(r),
+                     str(r.get("country_of_vendor") or "").strip().upper(),
+                     1 if build_site.is_resource_based(r.get("comments_en")) else 0)
                     for r in live)
-    _have = Counter((f[0], f[1][0], f[2][0], f[4], f[5], f[6], f[8], f[9]) for f in s_full)
+    _have = Counter((f[0], f[1][0], f[2][0], f[4], f[5], f[6], f[8], f[9],
+                     f[1][2], f[3][2], f[10], f[11]) for f in s_full)
     check("the contract search file holds every live contract as the data names it",
           _want == _have,
           f"{sum(_have.values()):,} rows" if _want == _have else
           f"file {sum(_have.values()):,} rows, data {len(live):,}; "
           f"{sum((_want - _have).values()):,} missing, {sum((_have - _want).values()):,} unexpected")
+
+    # One category filter entry per category, not one per spelling.
+    _ck = [e[2] for e in s_cat if e[2]]
+    check("the category filter lists each category once",
+          len(_ck) == len(set(_ck)) and set(_ck) == set(cats) and bool(_ck),
+          f"{len(set(_ck)):,} categories" if len(_ck) == len(set(_ck)) and set(_ck) == set(cats)
+          else f"file {len(_ck)} entries, {len(set(_ck))} distinct, data {len(cats)}")
+
+    check("the reviewed category merge list is well formed",
+          not merge_problems, "; ".join(merge_problems) if merge_problems
+          else f"{len(CAT_MERGES)} reviewed merges")
+
+    # ---- grey names on the index pages link into search ------------------
+    # A below-threshold supplier or category links to the search filtered to
+    # it. PRIVACY: the supplier link carries the supplier key, which is the
+    # name, so a name that could belong to a person must stay plain text.
+    # Tested against the data and is_person_shaped, and in both directions:
+    # every row that should link does, and none that must not, does.
+    grey_bad, grey_links, grey_person = [], 0, 0
+    for folder, param, groups in (("incumbent", "vendor", vends), ("category", "cat", cats)):
+        d = os.path.join(site, folder)
+        for f in sorted(os.listdir(d)) if os.path.isdir(d) else []:
+            if not f.startswith("index"):
+                continue
+            src = open(os.path.join(d, f), encoding="utf-8").read()
+            for row in re.findall(r'<li class="d"[^>]*>(.*?)</li>', src):
+                m = re.match(r'<a class="sx" href="\.\./search\.html\?' + param + r'=([^"]*)">([^<]*)</a>', row)
+                if not m:
+                    if "<a" in row:
+                        grey_bad.append(f"{folder}: a link of the wrong shape")
+                    continue
+                grey_links += 1
+                key = urllib.parse.unquote(_unescape(m.group(1)))
+                # The visible text is tested first and on its own, so a link
+                # that also fails another test still counts as a person.
+                # Not the key: keys have legal suffixes stripped, so "Lumina IT
+                # Inc." is keyed "lumina it" and would read as a person.
+                if folder == "incumbent" and build_site.is_person_shaped(_unescape(m.group(2))):
+                    grey_person += 1
+                    continue
+                if key not in groups:
+                    grey_bad.append(f"{folder}: a link to a key not in the data")
+                    continue
+                if substantial(groups[key]):
+                    grey_bad.append(f"{folder}: a link on a name that has its own page")
+                if folder == "incumbent":
+                    disp = Counter((i.get("vendor_name") or "").strip()
+                                   for i in groups[key]).most_common(1)[0][0]
+                    if build_site.is_person_shaped(disp):
+                        grey_person += 1
+    # Every thin group that is not person-shaped must be linked.
+    _exp = 0
+    for folder, groups in (("incumbent", vends), ("category", cats)):
+        for k, items in groups.items():
+            if substantial(items):
+                continue
+            if folder == "incumbent":
+                disp = Counter((i.get("vendor_name") or "").strip() for i in items).most_common(1)[0][0]
+                if build_site.is_person_shaped(disp) or \
+                        build_site.is_person_shaped(build_site.clip(disp, 52)):
+                    continue
+            _exp += 1
+    check("no person-shaped supplier name is linked from an index page",
+          grey_person == 0 and not grey_bad,
+          f"{grey_links:,} grey names linked" if grey_person == 0 and not grey_bad
+          else f"{grey_person} person-shaped; " + "; ".join(sorted(set(grey_bad))[:4]))
+    check("every other grey name on the index pages links into search",
+          grey_links == _exp, f"linked {grey_links:,}, expected {_exp:,}")
+
+    # ---- resource-based tag ----------------------------------------------
+    # The home page table lists the first 60 live contracts. Its tag count must
+    # be what the rule says for those rows: no tag invented, none dropped.
+    _home = os.path.join(site, "index.html")
+    if os.path.exists(_home):
+        _tags = open(_home, encoding="utf-8").read().count(f">{build_site.RESOURCE_LABEL}</span>")
+        # The same order the builder uses, day-zero quirk included.
+        _first = sorted(live, key=lambda r: r.get("days_to_expiry") or 10**9)[:60]
+        _rule = sum(1 for r in _first if build_site.is_resource_based(r.get("comments_en")))
+        check("the resource-based tag on the home page matches the rule",
+              _tags == _rule, f"page {_tags}, rule {_rule}")
 
     # The header box on every page, with its script, pointing at the site root
     # from wherever that page sits.
