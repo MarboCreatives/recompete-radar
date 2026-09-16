@@ -265,13 +265,15 @@
         status.textContent = 'Loading contracts…';
         loading = getJSON('search-contracts.json').then(function (j) {
           // Row: ref, supplier index, department index, category index,
-          // value, days to expiry, buyer org code, description.
+          // value, days to expiry, buyer org code, description, bidders,
+          // how contested it was last time.
           // Lookup entry: [text, link].
           var S = j.suppliers, D = j.departments, C = j.categories;
           rows = j.contracts.map(function (c) {
             var v = S[c[1]], d = D[c[2]], k = C[c[3]];
             return { ref: c[0], v: v[0], vh: v[1], d: d[0], dh: d[1], c: k[0], ch: k[1],
                      val: c[4], days: c[5], src: sourceUrl(c[6], c[0]), sc: c[7] || '',
+                     bids: c[8], dens: c[9] || '',
                      k: ' ' + norm([c[0], v[0], d[0], k[0], c[7] || ''].join(' ')) };
           });
           return rows;
@@ -287,64 +289,134 @@
       return a;
     }
 
+    // Sorting, the same as the tables on every other page: Expires, Value,
+    // Bidders and Last time. A first press sorts low to high, the next high to
+    // low. Rows with no value stay at the bottom both ways. The WHOLE match
+    // set is sorted, then the first LIMIT rows are drawn, so "high to low by
+    // value" shows the largest matches and not the largest of the soonest 200.
+    var DENSITY_RANK = { uncontested: 0, low: 1, moderate: 2, high: 3 };
+    var DENSITY_CLASS = { uncontested: 'hot', low: 'warn', moderate: 'good', high: 'dim' };
+    var COLS = [
+      { label: 'Expires', key: function (r) { return r.days; } },
+      { label: 'Value', cls: 'n', key: function (r) { return r.val; } },
+      { label: 'Incumbent' },
+      { label: 'Department' },
+      { label: 'Category' },
+      { label: 'Bidders', cls: 'n', key: function (r) { return r.bids; } },
+      { label: 'Last time', key: function (r) { return DENSITY_RANK[r.dens]; } }
+    ];
+    var hits = [], sortCol = -1, sortDir = 1;
+
+    function num(v) { return (v === null || v === undefined || isNaN(v)) ? null : +v; }
+
+    function ordered() {
+      var list = hits.slice();
+      if (sortCol < 0) {
+        list.sort(function (a, b) { return a.days - b.days; });
+        return list;
+      }
+      var key = COLS[sortCol].key;
+      list.sort(function (a, b) {
+        var x = num(key(a)), y = num(key(b));
+        if (x === null && y === null) return a.days - b.days;
+        if (x === null) return 1;
+        if (y === null) return -1;
+        return (x - y) * sortDir || (a.days - b.days);
+      });
+      return list;
+    }
+
+    function setStatus() {
+      var n = hits.length;
+      var order = sortCol < 0 ? 'expiring soonest'
+        : COLS[sortCol].label.toLowerCase() + (sortDir === 1 ? ', low to high' : ', high to low');
+      status.textContent = n === 0 ? 'No live contract matches.'
+        : (n === 1 ? '1 live contract matches.' : n.toLocaleString('en-CA') + ' live contracts match.')
+          + (n > LIMIT ? ' Showing the first ' + LIMIT + ', ' + order + '. Add a word to narrow it.'
+                       : ' Sorted by ' + order + '.');
+    }
+
+    function draw() {
+      out.textContent = '';
+      setStatus();
+      if (!hits.length) return;
+
+      var wrap = el('div', 'tw');
+      var table = el('table');
+      var head = el('tr');
+      COLS.forEach(function (c, i) {
+        var th = el('th', c.cls || null, c.label);
+        if (c.key) {
+          th.setAttribute('data-s', '');
+          th.tabIndex = 0;
+          th.setAttribute('role', 'button');
+          if (i === sortCol) th.setAttribute('aria-sort', sortDir === 1 ? 'ascending' : 'descending');
+          var go = function () {
+            if (sortCol === i) { sortDir = -sortDir; } else { sortCol = i; sortDir = 1; }
+            draw();
+            var again = out.querySelectorAll('th')[i];
+            if (again) again.focus();
+          };
+          th.addEventListener('click', go);
+          th.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); }
+          });
+        }
+        head.appendChild(th);
+      });
+      table.appendChild(head);
+
+      ordered().slice(0, LIMIT).forEach(function (r) {
+        var tr = el('tr');
+        tr.appendChild(el('td', 'd', r.days + 'd'));
+        tr.appendChild(el('td', 'n', money(r.val)));
+        var inc = el('td');
+        inc.appendChild(link(r.vh, r.v || '—'));
+        if (r.ref) {
+          inc.appendChild(el('br'));
+          var span = el('span', 'ref');
+          if (r.src) {
+            var s = el('a', null, r.ref);
+            s.href = r.src;
+            s.title = 'This contract on the Government of Canada contract search';
+            span.appendChild(s);
+          } else {
+            span.textContent = r.ref;
+          }
+          inc.appendChild(span);
+        }
+        if (r.sc) inc.appendChild(el('span', 'scope', r.sc));
+        tr.appendChild(inc);
+        var dept = el('td', 'd');
+        dept.appendChild(link(r.dh, english(r.d)));
+        tr.appendChild(dept);
+        var cat = el('td', 'd');
+        cat.appendChild(link(r.ch, r.c || '—'));
+        tr.appendChild(cat);
+        tr.appendChild(el('td', 'n d', r.bids === null || r.bids === undefined ? '—' : String(r.bids)));
+        var last = el('td');
+        last.appendChild(el('span', 'p ' + (DENSITY_CLASS[r.dens] || 'dim'), r.dens || '—'));
+        tr.appendChild(last);
+        table.appendChild(tr);
+      });
+      wrap.appendChild(table);
+      out.appendChild(wrap);
+    }
+
     function run(q) {
       var words = norm(q).split(' ').filter(Boolean);
       out.textContent = '';
-      if (!words.length) { status.textContent = ''; return; }
+      if (!words.length) { status.textContent = ''; hits = []; return; }
       load().then(function () {
         // Every word must start a word somewhere in the reference number,
         // supplier, department, category or description.
-        var hits = rows.filter(function (r) {
+        hits = rows.filter(function (r) {
           for (var i = 0; i < words.length; i++) {
             if (r.k.indexOf(' ' + words[i]) < 0) return false;
           }
           return true;
         });
-        hits.sort(function (a, b) { return a.days - b.days; });
-        var n = hits.length;
-        status.textContent = n === 0 ? 'No live contract matches.'
-          : (n === 1 ? '1 live contract matches.' : n.toLocaleString('en-CA') + ' live contracts match.')
-            + (n > LIMIT ? ' Showing the ' + LIMIT + ' expiring soonest. Add a word to narrow it.' : ' Expiring soonest first.');
-        if (!n) return;
-
-        var wrap = el('div', 'tw');
-        var table = el('table');
-        var head = el('tr');
-        [['Expires', ''], ['Value', 'n'], ['Incumbent', ''], ['Department', ''], ['Category', '']].forEach(function (h) {
-          head.appendChild(el('th', h[1] || null, h[0]));
-        });
-        table.appendChild(head);
-        hits.slice(0, LIMIT).forEach(function (r) {
-          var tr = el('tr');
-          tr.appendChild(el('td', 'd', r.days + 'd'));
-          tr.appendChild(el('td', 'n', money(r.val)));
-          var inc = el('td');
-          inc.appendChild(link(r.vh, r.v || '—'));
-          if (r.ref) {
-            inc.appendChild(el('br'));
-            var span = el('span', 'ref');
-            if (r.src) {
-              var s = el('a', null, r.ref);
-              s.href = r.src;
-              s.title = 'This contract on the Government of Canada contract search';
-              span.appendChild(s);
-            } else {
-              span.textContent = r.ref;
-            }
-            inc.appendChild(span);
-          }
-          if (r.sc) inc.appendChild(el('span', 'scope', r.sc));
-          tr.appendChild(inc);
-          var dept = el('td', 'd');
-          dept.appendChild(link(r.dh, english(r.d)));
-          tr.appendChild(dept);
-          var cat = el('td', 'd');
-          cat.appendChild(link(r.ch, r.c || '—'));
-          tr.appendChild(cat);
-          table.appendChild(tr);
-        });
-        wrap.appendChild(table);
-        out.appendChild(wrap);
+        draw();
       }, function () {
         status.textContent = 'The contract list did not load. Try again, or use the browse links above.';
       });
