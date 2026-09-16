@@ -631,6 +631,32 @@ th[data-s]:focus{outline:1px solid var(--ac);outline-offset:2px}
 th[data-s]::after{content:"\\2195";margin-left:5px;font-size:10px;opacity:.35}
 th[data-s][aria-sort="ascending"]::after{content:"\\2191";opacity:1;color:var(--ac)}
 th[data-s][aria-sort="descending"]::after{content:"\\2193";opacity:1;color:var(--ac)}
+
+/* Search. The header box is drawn by search.js, so with no JavaScript the
+   mount stays hidden and takes no space. The list sits over the page rather
+   than pushing it down, so typing does not shift the table a reader was on. */
+.srchw{margin:13px 0 0;max-width:560px}
+.srch{position:relative;display:flex;gap:8px}
+.srch-l{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.srch input{flex:1 1 auto;min-width:0;padding:8px 12px;border-radius:7px;border:1px solid var(--ln);
+background:var(--pn);color:var(--tx);font-size:14px}
+.srch input:focus{outline:none;border-color:var(--ac)}
+.srch button{padding:8px 18px;border-radius:7px;border:0;background:var(--ac);
+color:#06121f;font-weight:600;font-size:14px;cursor:pointer}
+.srch-list{position:absolute;z-index:20;top:100%;left:0;right:0;margin-top:4px;
+background:var(--pn);border:1px solid var(--ln);border-radius:8px;overflow:hidden;
+box-shadow:0 8px 24px rgba(0,0,0,.45)}
+.srch-list li{display:block;padding:0;border-bottom:1px solid var(--ln)}
+.srch-list li:last-child{border-bottom:0}
+.srch-list a{display:flex;justify-content:space-between;gap:12px;padding:8px 12px;color:var(--tx)}
+.srch-list a:hover,.srch-list li.on a{background:#1d2836;text-decoration:none}
+.srch-n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.srch-t{color:var(--dm);font-size:12px;white-space:nowrap}
+.srch-all a{color:var(--ac)}
+.srch-none{padding:8px 12px!important;color:var(--dm)}
+.srch-page{max-width:640px;margin:8px 0 6px}
+.srch-status{margin:10px 0 4px}
+@media(max-width:560px){.srch-t{display:none}}
 """
 
 
@@ -815,7 +841,9 @@ def page(title: str, desc: str, body: str, depth: int = 0, url: str = "",
 <a href="{root}department/index.html">Browse by department</a>
 <a href="{root}incumbent/index.html">Browse by incumbent</a>
 <a href="{root}province/index.html">Browse by supplier province</a>
-</nav></header>
+<a href="{root}search.html">Search contracts</a>
+</nav>
+<div class="srchw" id="rr-search" data-root="{root}" hidden></div></header>
 {body}
 <div class="notes"><p class="nb">{esc(NOT_A_TENDER_BOARD)}</p>
 <p>{esc(OPTION_YEARS)}</p>{extra_notes}</div>
@@ -828,7 +856,8 @@ spend. Only services and construction contracts are shown, where the published
 "Contract Period End Date or Delivery Date" field is defined as the end of the
 performance period. Published quarterly, so the most recent quarter may not appear.
 Not affiliated with the Government of Canada.{badge}</footer>
-</div>{SORT_JS}</body></html>"""
+</div>{SORT_JS}
+<script src="{root}search.js" defer></script></body></html>"""
 
 
 def contract_table(rows: list[dict], show: tuple[str, ...] = ("dept", "cat"),
@@ -1870,6 +1899,121 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
              f"are coming up for renewal. See the incumbent, value, expiry date and how "
              f"contested each was.", body, 0, "index.html", stats_note))
 
+    # ---- search
+    # Two index files and one page. See search.js for what reads them.
+    #
+    # PRIVACY: both files are built from `live`, which suppress_individuals()
+    # has ALREADY been run over, near the top of this function, and from the
+    # groups made from it. That is the only reason no withheld person is in
+    # them. Never build either file from `rows`, from the pipeline JSON, or
+    # from anything read before that call: a public JSON file would then carry
+    # every name the pages refuse to print. audit.py fails the deploy if a
+    # withheld name reaches either file, and it tests that against the names
+    # before suppression, not against this function's own output.
+    def entity_href(folder: str, key: Optional[str]) -> str:
+        """Where a name links on the pages: its page, its index row, or nowhere.
+
+        The same order as entity_link(), from the same two maps, so a search
+        result lands where a click on that name in a table would.
+        """
+        k = key or ""
+        fn = filenames[folder].get(k)
+        if fn:
+            return f"{folder}/{fn}"
+        anchor = ANCHORS[folder].get(k)
+        return f"{folder}/{anchor}" if anchor else ""
+
+    # Tier 1. Only entities with a page of their own: 2,030 on the live data,
+    # 48 KB gzipped, loaded from every page. Thin groups are left out on
+    # purpose. Listing all 8,300 of them cost 193 KB, four times the budget,
+    # and every one is still found by the contract search the list offers as
+    # its last line.
+    entities = []
+    for code, folder, groups in (("d", "department", depts), ("i", "incumbent", vendors),
+                                 ("c", "category", cats), ("p", "province", provs)):
+        for key, g in sorted(groups.items(), key=lambda kv: (-kv[1]["count"], kv[1]["display"])):
+            fn = filenames[folder].get(key)
+            if fn:
+                entities.append([code, g["display"], f"{folder}/{fn}", g["count"]])
+
+    # Tier 2. Every live contract, in the order the landing page lists them.
+    # Supplier, department and category are each stored once in a lookup list
+    # and referred to by position. On the live data the repeated names were
+    # most of a 1.2 MB file; stored once it is about half that.
+    #
+    # A contract row, by position:
+    #   reference number, supplier index, department index, category index,
+    #   value, days to expiry, buyer org code, description of the work.
+    # A lookup entry is [text as the table prints it, link or ""].
+    #
+    # The org code is stored instead of the source-record URL. search.js builds
+    # the same URL source_record_url() does, and audit.py checks the code
+    # against the data.
+    #
+    # The description is scope_text(), the exact string contract_table() prints
+    # under the supplier name. A comment that fails the personal-name scan is
+    # withheld on the pages, so it is an empty string here too. Never put the
+    # raw comments_en in this file.
+    lookups: dict[str, dict[tuple, int]] = {"suppliers": {}, "departments": {}, "categories": {}}
+
+    def ix(table: str, text: str, href: str) -> int:
+        t = lookups[table]
+        return t.setdefault((text, href), len(t))
+
+    contract_rows = []
+    for r in live:
+        raw_cat = (r.get("category_name") or "").strip()
+        cat_txt = ("" if is_placeholder_category(raw_cat)
+                   else " ".join((raw_cat or r.get("commodity_code") or "").split()))
+        contract_rows.append([
+            str(r.get("reference_number") or ""),
+            ix("suppliers", r.get("vendor_name") or "", entity_href("incumbent", r.get("vendor_key"))),
+            ix("departments", r.get("buyer_org") or "", entity_href("department", r.get("buyer_org"))),
+            ix("categories", cat_txt, entity_href("category", r.get("category_key")) if cat_txt else ""),
+            round(r.get("contract_value") or 0),
+            r.get("days_to_expiry"),
+            str(r.get("buyer_org_code") or "").strip(),
+            scope_text(r.get("comments_en")) or "",
+        ])
+
+    def write_search_file(name: str, lists: dict) -> None:
+        """One entry per line, so the file can still be read and diffed."""
+        parts = []
+        for field, items in lists.items():
+            parts.append(f'"{field}":[\n' + ",\n".join(
+                json.dumps(e, ensure_ascii=False, separators=(",", ":")) for e in items) + "\n]")
+        with open(os.path.join(outdir, name), "w", encoding="utf-8") as fh:
+            fh.write('{"version":2,\n' + ",\n".join(parts) + "}\n")
+
+    write_search_file("search-index.json", {"entities": entities})
+    write_search_file("search-contracts.json", {
+        **{t: [list(k) for k in lookups[t]] for t in ("suppliers", "departments", "categories")},
+        "contracts": contract_rows})
+
+    # The script is a static file so the browser caches it once for all pages.
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "search.js"),
+              encoding="utf-8") as fh:
+        search_js = fh.read()
+    with open(os.path.join(outdir, "search.js"), "w", encoding="utf-8") as fh:
+        fh.write(search_js)
+
+    search_body = (
+        '<div class="crumb"><a href="index.html">Home</a> › Search</div>'
+        "<h2>Search contracts</h2>"
+        f'<p class="sb">Search all {len(live):,} live contracts by supplier, department, '
+        'category, reference number or words in the description of the work. The search '
+        'runs in your browser; nothing you '
+        'type is sent anywhere.</p>'
+        '<div id="rr-contracts" data-root=""></div>'
+        '<noscript><p class="sb">Search needs JavaScript. Every contract is still '
+        'listed under the browse links above.</p></noscript>')
+    open(os.path.join(outdir, "search.html"), "w", encoding="utf-8").write(
+        page(f"Search contracts | {SITE}",
+             f"Search {len(live):,} Canadian federal services contracts coming up for "
+             f"renewal by supplier, department, category or reference number.",
+             search_body, 0, "search.html"))
+    urls.append("search.html")
+
     # ---- sitemap + robots
     # The sitemap protocol REQUIRES fully-qualified URLs. Relative paths are
     # rejected outright by Search Console, which would silently kill the entire
@@ -1890,6 +2034,7 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
             "departments": (written["department"], len(depts)),
             "incumbents": (written["incumbent"], len(vendors)),
             "categories": (written["category"], len(cats)),
+            "search_entities": len(entities), "search_contracts": len(contract_rows),
             "buckets": counts}
 
 
@@ -2044,6 +2189,8 @@ def main() -> int:
         made, total = s[k]
         print(f"{k:>12}: {made:,} pages generated of {total:,} groups "
               f"({total-made:,} listed on index, below thin-content threshold)")
+    print(f"search index   : {s['search_entities']:,} entities, "
+          f"{s['search_contracts']:,} contracts")
     print(f"\ntotal pages    : {s['pages']:,}")
 
     bad = verify(args.out)
