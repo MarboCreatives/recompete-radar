@@ -250,30 +250,37 @@
     form.appendChild(input);
     form.appendChild(button);
 
+    var panel = el('div', 'flt');
+    var chips = el('p', 'sb flt-chips');
+    chips.hidden = true;
     var status = el('p', 'sb srch-status');
     status.setAttribute('role', 'status');
     status.setAttribute('aria-live', 'polite');
     var out = el('div');
 
     contracts.appendChild(form);
+    contracts.appendChild(panel);
+    contracts.appendChild(chips);
     contracts.appendChild(status);
     contracts.appendChild(out);
 
-    var rows = null, loading = null;
+    var rows = null, loading = null, S = [], D = [], C = [];
     function load() {
       if (!loading) {
         status.textContent = 'Loading contracts…';
         loading = getJSON('search-contracts.json').then(function (j) {
           // Row: ref, supplier index, department index, category index,
           // value, days to expiry, buyer org code, description, bidders,
-          // how contested it was last time.
-          // Lookup entry: [text, link].
-          var S = j.suppliers, D = j.departments, C = j.categories;
+          // how contested it was last time, supplier country, resource-based.
+          // Lookups: suppliers [text, link, key], departments [name, link],
+          // categories [name, link, key].
+          S = j.suppliers; D = j.departments; C = j.categories;
           rows = j.contracts.map(function (c) {
             var v = S[c[1]], d = D[c[2]], k = C[c[3]];
-            return { ref: c[0], v: v[0], vh: v[1], d: d[0], dh: d[1], c: k[0], ch: k[1],
+            return { ref: c[0], v: v[0], vh: v[1], vk: v[2] || '', di: c[2], d: d[0], dh: d[1],
+                     ci: c[3], c: k[0], ch: k[1], ck: k[2] || '',
                      val: c[4], days: c[5], src: sourceUrl(c[6], c[0]), sc: c[7] || '',
-                     bids: c[8], dens: c[9] || '',
+                     bids: c[8], dens: c[9] || '', cc: c[10] || '', res: c[11] === 1,
                      k: ' ' + norm([c[0], v[0], d[0], k[0], c[7] || ''].join(' ')) };
           });
           return rows;
@@ -289,11 +296,299 @@
       return a;
     }
 
-    // Sorting, the same as the tables on every other page: Expires, Value,
-    // Bidders and Last time. A first press sorts low to high, the next high to
-    // low. Rows with no value stay at the bottom both ways. The WHOLE match
-    // set is sorted, then the first LIMIT rows are drawn, so "high to low by
-    // value" shows the largest matches and not the largest of the soonest 200.
+    /* ---------------------------------------------------------- filters */
+    // Every filter narrows the same match set, and they all combine with the
+    // search words. All state lives in the address, so a filtered search can
+    // be bookmarked or sent to someone. The grey names on the index pages
+    // link here with ?vendor= or ?cat= set.
+    var state = { q: '', cats: [], depts: [], vmin: null, vmax: null, bmin: null, bmax: null,
+                  within: 0, country: '', res: '', vendor: '' };
+
+    function field(labelText, control, cls) {
+      var wrap = el('div', 'flt-f' + (cls ? ' ' + cls : ''));
+      var id = 'flt-' + Math.random().toString(36).slice(2, 8);
+      var lab = el('label', 'flt-l', labelText);
+      lab.htmlFor = id;
+      control.id = id;
+      wrap.appendChild(lab);
+      wrap.appendChild(control);
+      return wrap;
+    }
+
+    function numberBox(placeholder) {
+      var i = el('input');
+      i.type = 'number';
+      i.min = '0';
+      i.inputMode = 'numeric';
+      i.placeholder = placeholder;
+      return i;
+    }
+
+    function select(options) {
+      var s = el('select');
+      options.forEach(function (o) {
+        var opt = el('option', null, o[1]);
+        opt.value = o[0];
+        s.appendChild(opt);
+      });
+      return s;
+    }
+
+    // A checkbox list with its own "find" box, for categories and departments.
+    function pickList(title, key) {
+      var box = el('details', 'flt-pick');
+      var sum = el('summary', null, title);
+      box.appendChild(sum);
+      var find = el('input');
+      find.type = 'search';
+      find.placeholder = 'Find a ' + title.toLowerCase().replace(/ies$/, 'y').replace(/s$/, '');
+      find.setAttribute('aria-label', 'Find in ' + title.toLowerCase());
+      box.appendChild(find);
+      var list = el('ul', 'flt-list');
+      box.appendChild(list);
+      find.addEventListener('input', function () {
+        var q = norm(find.value);
+        Array.prototype.forEach.call(list.children, function (li) {
+          li.hidden = q ? li.getAttribute('data-n').indexOf(q) < 0 : false;
+        });
+      });
+      var api = {
+        box: box,
+        fill: function (items) {
+          list.textContent = '';
+          items.forEach(function (it) {
+            var li = el('li');
+            li.setAttribute('data-n', ' ' + norm(it.label));
+            var lab = el('label');
+            var cb = el('input');
+            cb.type = 'checkbox';
+            cb.value = it.value;
+            cb.checked = state[key].indexOf(it.value) >= 0;
+            cb.addEventListener('change', function () {
+              var at = state[key].indexOf(it.value);
+              if (cb.checked && at < 0) state[key].push(it.value);
+              if (!cb.checked && at >= 0) state[key].splice(at, 1);
+              api.count();
+              apply();
+            });
+            lab.appendChild(cb);
+            lab.appendChild(document.createTextNode(' ' + it.label + ' '));
+            lab.appendChild(el('span', 'd', '(' + it.n.toLocaleString('en-CA') + ')'));
+            li.appendChild(lab);
+            list.appendChild(li);
+          });
+          // A list with something already ticked (from the address) opens, so
+          // the reader can see what is narrowing the results.
+          if (state[key].length) box.open = true;
+          api.count();
+        },
+        count: function () {
+          sum.textContent = title + (state[key].length ? ' (' + state[key].length + ' chosen)' : '');
+        },
+        sync: function () {
+          Array.prototype.forEach.call(list.querySelectorAll('input[type=checkbox]'), function (cb) {
+            cb.checked = state[key].indexOf(cb.value) >= 0;
+          });
+          api.count();
+        }
+      };
+      return api;
+    }
+
+    var catPick = pickList('Categories', 'cats');
+    var deptPick = pickList('Departments', 'depts');
+    var vmin = numberBox('Min $'), vmax = numberBox('Max $');
+    var bmin = numberBox('Min'), bmax = numberBox('Max');
+    var within = select([['0', 'Any time'], ['6', 'Within 6 months'], ['12', 'Within 12 months'],
+                         ['24', 'Within 24 months']]);
+    var country = select([['', 'Anywhere'], ['ca', 'Canada'], ['intl', 'Outside Canada']]);
+    var resSel = select([['', 'Show all'], ['only', 'Only resource-based'], ['hide', 'Hide resource-based']]);
+    var clear = el('button', 'flt-clear', 'Clear filters');
+    clear.type = 'button';
+
+    var pair = function (a, b) {
+      var w = el('span', 'flt-pair');
+      w.appendChild(a);
+      w.appendChild(el('span', 'd', '–'));
+      w.appendChild(b);
+      return w;
+    };
+    var valueWrap = el('div', 'flt-f');
+    valueWrap.appendChild(el('span', 'flt-l', 'Contract value ($)'));
+    vmin.setAttribute('aria-label', 'Minimum contract value in dollars');
+    vmax.setAttribute('aria-label', 'Maximum contract value in dollars');
+    valueWrap.appendChild(pair(vmin, vmax));
+    var bidWrap = el('div', 'flt-f');
+    bidWrap.appendChild(el('span', 'flt-l', 'Bidders last time'));
+    bmin.setAttribute('aria-label', 'Minimum number of bidders');
+    bmax.setAttribute('aria-label', 'Maximum number of bidders');
+    bidWrap.appendChild(pair(bmin, bmax));
+
+    var grid = el('div', 'flt-grid');
+    grid.appendChild(catPick.box);
+    grid.appendChild(deptPick.box);
+    grid.appendChild(valueWrap);
+    grid.appendChild(bidWrap);
+    grid.appendChild(field('Expires', within));
+    grid.appendChild(field('Supplier based', country));
+    var resField = field('Staffing', resSel);
+    resField.appendChild(el('span', 'flt-note',
+      'Marked only where the description names TBIPS, TSPS, ProServices or a role level. ' +
+      'Most staffing contracts do not say so and are not marked.'));
+    grid.appendChild(resField);
+    var foot = el('div', 'flt-foot');
+    foot.appendChild(clear);
+    panel.appendChild(grid);
+    panel.appendChild(foot);
+
+    function numOrNull(i) {
+      var v = i.value.trim();
+      if (v === '') return null;
+      var n = parseFloat(v);
+      return isNaN(n) || n < 0 ? null : n;
+    }
+
+    [vmin, vmax, bmin, bmax].forEach(function (i) {
+      i.addEventListener('input', function () {
+        state.vmin = numOrNull(vmin); state.vmax = numOrNull(vmax);
+        state.bmin = numOrNull(bmin); state.bmax = numOrNull(bmax);
+        apply();
+      });
+    });
+    within.addEventListener('change', function () { state.within = +within.value || 0; apply(); });
+    country.addEventListener('change', function () { state.country = country.value; apply(); });
+    resSel.addEventListener('change', function () { state.res = resSel.value; apply(); });
+    clear.addEventListener('click', function () {
+      state.cats = []; state.depts = []; state.vmin = state.vmax = state.bmin = state.bmax = null;
+      state.within = 0; state.country = ''; state.res = ''; state.vendor = '';
+      syncControls();
+      apply();
+    });
+
+    function syncControls() {
+      input.value = state.q;
+      vmin.value = state.vmin === null ? '' : state.vmin;
+      vmax.value = state.vmax === null ? '' : state.vmax;
+      bmin.value = state.bmin === null ? '' : state.bmin;
+      bmax.value = state.bmax === null ? '' : state.bmax;
+      within.value = String(state.within || 0);
+      country.value = state.country;
+      resSel.value = state.res;
+      catPick.sync();
+      deptPick.sync();
+    }
+
+    function anyFilter() {
+      return !!(state.cats.length || state.depts.length || state.vmin !== null || state.vmax !== null ||
+                state.bmin !== null || state.bmax !== null || state.within || state.country ||
+                state.res || state.vendor);
+    }
+
+    // The option lists are built from the data once it loads, with the number
+    // of live contracts in each, largest first.
+    function fillPickers() {
+      var cn = {}, dn = {};
+      rows.forEach(function (r) {
+        if (r.ck) cn[r.ck] = (cn[r.ck] || 0) + 1;
+        dn[r.di] = (dn[r.di] || 0) + 1;
+      });
+      var cats = [];
+      C.forEach(function (e) {
+        if (e[2] && cn[e[2]]) cats.push({ value: e[2], label: e[0], n: cn[e[2]] });
+      });
+      cats.sort(function (a, b) { return b.n - a.n || (a.label < b.label ? -1 : 1); });
+      catPick.fill(cats);
+      var depts = [];
+      D.forEach(function (e, i) {
+        if (e[0] && dn[i]) depts.push({ value: e[0], label: english(e[0]), n: dn[i] });
+      });
+      depts.sort(function (a, b) { return b.n - a.n || (a.label < b.label ? -1 : 1); });
+      deptPick.fill(depts);
+    }
+
+    function passes(r, words) {
+      for (var i = 0; i < words.length; i++) {
+        if (r.k.indexOf(' ' + words[i]) < 0) return false;
+      }
+      if (state.vendor && r.vk !== state.vendor) return false;
+      if (state.cats.length && state.cats.indexOf(r.ck) < 0) return false;
+      if (state.depts.length && state.depts.indexOf(r.d) < 0) return false;
+      if (state.vmin !== null && r.val < state.vmin) return false;
+      if (state.vmax !== null && r.val > state.vmax) return false;
+      if (state.bmin !== null || state.bmax !== null) {
+        if (r.bids === null || r.bids === undefined) return false;
+        if (state.bmin !== null && r.bids < state.bmin) return false;
+        if (state.bmax !== null && r.bids > state.bmax) return false;
+      }
+      if (state.within && r.days > Math.round(state.within * 365 / 12)) return false;
+      if (state.country === 'ca' && r.cc !== 'CA') return false;
+      if (state.country === 'intl' && (r.cc === 'CA' || r.cc === '')) return false;
+      if (state.res === 'only' && !r.res) return false;
+      if (state.res === 'hide' && r.res) return false;
+      return true;
+    }
+
+    function writeAddress() {
+      if (!(window.history && history.replaceState)) return;
+      var p = [];
+      function add(k, v) { p.push(k + '=' + encodeURIComponent(v)); }
+      if (state.q) add('q', state.q);
+      if (state.vendor) add('vendor', state.vendor);
+      state.cats.forEach(function (c) { add('cat', c); });
+      state.depts.forEach(function (d) { add('dept', d); });
+      if (state.vmin !== null) add('vmin', state.vmin);
+      if (state.vmax !== null) add('vmax', state.vmax);
+      if (state.bmin !== null) add('bmin', state.bmin);
+      if (state.bmax !== null) add('bmax', state.bmax);
+      if (state.within) add('within', state.within);
+      if (state.country) add('country', state.country);
+      if (state.res) add('res', state.res);
+      history.replaceState(null, '', p.length ? '?' + p.join('&') : location.pathname);
+    }
+
+    function readAddress() {
+      var parts = (location.search || '').replace(/^\?/, '').split('&');
+      parts.forEach(function (kv) {
+        if (!kv) return;
+        var at = kv.indexOf('=');
+        var k = at < 0 ? kv : kv.slice(0, at);
+        var v = '';
+        try { v = decodeURIComponent((at < 0 ? '' : kv.slice(at + 1)).replace(/\+/g, ' ')); } catch (e) { return; }
+        var n = parseFloat(v);
+        if (k === 'q') state.q = v;
+        else if (k === 'vendor') state.vendor = v;
+        else if (k === 'cat' && v && state.cats.indexOf(v) < 0) state.cats.push(v);
+        else if (k === 'dept' && v && state.depts.indexOf(v) < 0) state.depts.push(v);
+        else if ((k === 'vmin' || k === 'vmax' || k === 'bmin' || k === 'bmax') && !isNaN(n) && n >= 0) state[k] = n;
+        else if (k === 'within' && [6, 12, 24].indexOf(n) >= 0) state.within = n;
+        else if (k === 'country' && (v === 'ca' || v === 'intl')) state.country = v;
+        else if (k === 'res' && (v === 'only' || v === 'hide')) state.res = v;
+      });
+    }
+
+    function drawChips() {
+      chips.textContent = '';
+      if (!state.vendor) { chips.hidden = true; return; }
+      var name = state.vendor;
+      for (var i = 0; i < S.length; i++) {
+        if (S[i][2] === state.vendor) { name = S[i][0]; break; }
+      }
+      chips.appendChild(document.createTextNode('Supplier: '));
+      chips.appendChild(el('strong', null, name));
+      var x = el('button', 'flt-x', 'Remove');
+      x.type = 'button';
+      x.setAttribute('aria-label', 'Remove the supplier filter');
+      x.addEventListener('click', function () { state.vendor = ''; apply(); });
+      chips.appendChild(document.createTextNode(' '));
+      chips.appendChild(x);
+      chips.hidden = false;
+    }
+
+    /* ---------------------------------------------------------- sorting */
+    // Same as the tables on every other page: Expires, Value, Bidders and
+    // Last time. A first press sorts low to high, the next high to low. Rows
+    // with no value stay at the bottom both ways. The WHOLE match set is
+    // sorted, then the first LIMIT rows are drawn.
     var DENSITY_RANK = { uncontested: 0, low: 1, moderate: 2, high: 3 };
     var DENSITY_CLASS = { uncontested: 'hot', low: 'warn', moderate: 'good', high: 'dim' };
     var COLS = [
@@ -332,7 +627,7 @@
         : COLS[sortCol].label.toLowerCase() + (sortDir === 1 ? ', low to high' : ', high to low');
       status.textContent = n === 0 ? 'No live contract matches.'
         : (n === 1 ? '1 live contract matches.' : n.toLocaleString('en-CA') + ' live contracts match.')
-          + (n > LIMIT ? ' Showing the first ' + LIMIT + ', ' + order + '. Add a word to narrow it.'
+          + (n > LIMIT ? ' Showing the first ' + LIMIT + ', ' + order + '. Add a word or a filter to narrow it.'
                        : ' Sorted by ' + order + '.');
     }
 
@@ -385,6 +680,13 @@
           }
           inc.appendChild(span);
         }
+        if (r.res) {
+          inc.appendChild(el('br'));
+          var f = el('span', 'flag', 'Resource-based');
+          f.title = 'The description names a staffing arrangement (TBIPS, TSPS, ProServices or a role level). ' +
+                    'Most staffing contracts do not say so and are not marked.';
+          inc.appendChild(f);
+        }
         if (r.sc) inc.appendChild(el('span', 'scope', r.sc));
         tr.appendChild(inc);
         var dept = el('td', 'd');
@@ -403,19 +705,19 @@
       out.appendChild(wrap);
     }
 
-    function run(q) {
-      var words = norm(q).split(' ').filter(Boolean);
+    function apply() {
+      writeAddress();
+      var words = norm(state.q).split(' ').filter(Boolean);
       out.textContent = '';
-      if (!words.length) { status.textContent = ''; hits = []; return; }
+      if (!words.length && !anyFilter()) {
+        hits = [];
+        chips.hidden = true;
+        status.textContent = rows ? 'Type a word or choose a filter.' : '';
+        return;
+      }
       load().then(function () {
-        // Every word must start a word somewhere in the reference number,
-        // supplier, department, category or description.
-        hits = rows.filter(function (r) {
-          for (var i = 0; i < words.length; i++) {
-            if (r.k.indexOf(' ' + words[i]) < 0) return false;
-          }
-          return true;
-        });
+        drawChips();
+        hits = rows.filter(function (r) { return passes(r, words); });
         draw();
       }, function () {
         status.textContent = 'The contract list did not load. Try again, or use the browse links above.';
@@ -424,24 +726,22 @@
 
     form.addEventListener('submit', function (ev) {
       ev.preventDefault();
-      var q = input.value.trim();
-      if (window.history && history.replaceState) {
-        history.replaceState(null, '', q ? '?q=' + encodeURIComponent(q) : location.pathname);
-      }
-      run(q);
+      state.q = input.value.trim();
+      apply();
     });
 
-    var start = '';
-    var m = /[?&]q=([^&#]*)/.exec(location.search);
-    if (m) {
-      try { start = decodeURIComponent(m[1].replace(/\+/g, ' ')); } catch (e) { start = ''; }
-    }
-    if (start) {
-      input.value = start;
-      run(start);
-    } else {
-      input.focus();
-    }
+    readAddress();
+    syncControls();
+    // The option lists need the data, so the file loads with the page here.
+    // This is the search page, the one place that file is meant to load.
+    load().then(function () {
+      fillPickers();
+      if (state.q || anyFilter()) apply();
+      else status.textContent = 'Type a word or choose a filter.';
+    }, function () {
+      status.textContent = 'The contract list did not load. Try again, or use the browse links above.';
+    });
+    if (!state.q && !anyFilter()) input.focus();
   }
 
   if (header) drawHeaderBox();

@@ -1,0 +1,41 @@
+# Category merges reviewed and approved by Jon, 16 September 2026.
+#
+#   from => to
+#
+# One category the source writes more than one way. Both sides are read
+# through build_site.category_norm(), so capitalisation, a leading commodity
+# code and spacing around dashes and slashes do not matter here; those are
+# merged automatically and are not listed. Everything below is a judgement:
+# a name cut off at about 50 characters, a short form or an abbreviation.
+#
+# NOT merged, on purpose: names that differ by "and parts" or "(specify)" in a
+# way that can be two separate categories, e.g. "Other equipment" and "Other
+# equipment and parts", or "Electric lighting, distribution and control
+# equipment" and "... and parts". Add a line only after checking both sides
+# name the same thing. A target must not itself be merged.
+
+Communications professional services not elsewhere => Communications professional services not elsewhere specified
+Communications/networking equipment (includes analog, digital and combined analog/digital equipment, cabling, parts and => Communications/networking equipment (includes analog, digital and combined analog/digital equipment, cabling, parts and peripherals)
+Computer equipment related to distributed comput => Computer equipment related to distributed computing environment (DCE)-desktop/personal/portable (includes all related parts and peripherals)
+Computer equipment related to distributed computing environment (DCE)-desktop/personal/portable (includes all related => Computer equipment related to distributed computing environment (DCE)-desktop/personal/portable (includes all related parts and peripherals)
+Computer services (includes IT solutions/deliver => Computer services (includes IT solutions/deliverables as well as IT managed services)
+Computer services (includes information technology solutions/deliverables as well as information technology managed services) => Computer services (includes IT solutions/deliverables as well as IT managed services)
+Heating, air-conditioning and refrigeration equi => Heating, air-conditioning and refrigeration equipment
+Heating, air-conditioning and refrigeration equip => Heating, air-conditioning and refrigeration equipment
+Image/video communications equipment => Image/video communications equipment (includes telepresence/video conferencing equipment, cabling, parts and peripherals)
+Non-professional personal service contracts => Non-professional personal service contracts not elsewhere specified
+Non-public servant travel-support core mandate => Non-public servant travel-support core mandate a
+Other professional services not otherwise specifie => Other professional services not elsewhere specified
+Other professional services not otherwise specified => Other professional services not elsewhere specified
+Other professional serv. not elsewhere specified => Other professional services not elsewhere specified
+Printed matter, including books, newspapers, pic => Printed matter, including books, newspapers, pictures, manuscripts and forms
+Rental of computer equipment related to distributed computing environment (DCE)-desktop/personal/portable => Rental of computer equipment related to distributed computing environment (DCE)-desktop/personal/portable (includes all related parts and peripherals)
+Repair and maintenance-computer equipment related to distributed computing environment (DCE)-desktop/personal/portab => Repair and maintenance-computer equipment related to distributed computing environment (DCE)-desktop/personal/portable (includes all related parts and peripherals)
+Tuition fees and costs of attending courses incl => Tuition fees and costs of attending courses including seminars not elsewhere specified
+Tuition fees & costs of attending courses/seminars => Tuition fees and costs of attending courses including seminars not elsewhere specified
+Accounting & audit services => Accounting and audit services
+Info technology and telecomm consultants => Information technology and telecommunications consultants
+Road motor vehicles-non military => Road motor vehicles-non-military
+Rental of machinery, office furniture and fixtures => Rental of machinery, office furniture and fixtures and other equipment
+Other buildings (specify) => Other buildings
+Management consulting services => Management consulting

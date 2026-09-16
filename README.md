@@ -97,6 +97,7 @@ generator, so a generator bug cannot hide inside it.
 | `build_site.py` | Generates the static site |
 | `audit.py` | Independently verifies the site against the data |
 | `search.js` | Site search. Copied into the site by `build_site.py`; reads `search-index.json` and `search-contracts.json`, which the build writes after names are withheld |
+| `category_merges.txt` | Category names Jon reviewed as the same category written two ways. Read by `build_site.py` and, separately, by `audit.py` |
 | `fixture_contracts.json` | 110 real API records used by `--self-test` |
 | `.github/workflows/refresh.yml` | The automation |
 
