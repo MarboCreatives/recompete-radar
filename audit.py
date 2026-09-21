@@ -75,6 +75,10 @@ def main() -> int:
                          "mismatch between the two is a failure, so a workflow\n"
                          "that sets the flag for one and not the other cannot\n"
                          "pass.")
+    ap.add_argument("--reviews", default="reviews.json",
+                    help="The same value passed to build_site.py --reviews.\n"
+                         "These checks recompute what the pages should show\n"
+                         "from this file rather than trusting the generator.")
     ap.add_argument("--allow-small", action="store_true",
                     help="Skip the plausibility floors and widen the landing-page\n"
                          "value tolerance. For the offline fixture check ONLY: a\n"
@@ -1241,6 +1245,90 @@ def main() -> int:
                  or r.get("commodity_code") or ""))
         check("every home-page row with a real category shows it under the incumbent",
               _lines == _exp_cat, f"page {_lines}, rule {_exp_cat}")
+
+    # ---- reviews of the site ----------------------------------------------
+    # REVIEWS-DESIGN.md option 1. The raw file is read here rather than through
+    # build_site.load_reviews, so a loader that stopped enforcing a field is
+    # caught by this gate instead of being trusted by it.
+    #
+    # Nothing below invents a review. With no file and with an empty list every
+    # check still runs and still means something: it asserts that nothing was
+    # rendered, which is the state the design requires until somebody has
+    # actually said something.
+    _rv_raw: list = []
+    if os.path.exists(a.reviews):
+        try:
+            _rv_raw = json.load(open(a.reviews, encoding="utf-8"))
+        except (ValueError, OSError) as exc:
+            _rv_raw = [{"__unreadable__": str(exc)}]
+    check("the reviews file is a list", isinstance(_rv_raw, list),
+          f"{a.reviews} is {type(_rv_raw).__name__}")
+    _rv = [r for r in _rv_raw if isinstance(r, dict)] if isinstance(_rv_raw, list) else []
+
+    # Consent first, because it is the one whose failure publishes a real
+    # person's name under an attribution nobody agreed to.
+    _no_consent = sum(1 for r in _rv
+                      if not isinstance(r.get("consent"), str) or not r["consent"].strip())
+    check("every review records the consent to publish it", _no_consent == 0,
+          f"{_no_consent} of {len(_rv)} without a consent record")
+
+    _incomplete = sum(
+        1 for r in _rv
+        if any(not isinstance(r.get(f), str) or not r[f].strip()
+               for f in ("name", "role", "quote", "date")))
+    check("every review has a name, a role, a quote and a date", _incomplete == 0,
+          f"{_incomplete} of {len(_rv)} incomplete")
+
+    # Nothing but the quote is published. `consent` is where the permission was
+    # given - an address, a date, a thread - and it is recorded for Jon, never
+    # for a reader.
+    _consents = [r["consent"].strip() for r in _rv
+                 if isinstance(r.get("consent"), str) and r["consent"].strip()]
+    _leaked = []
+    for f in html:
+        src = open(f, encoding="utf-8").read()
+        for c in _consents:
+            if c and c in src:
+                _leaked.append(os.path.relpath(f, site).replace(os.sep, "/"))
+                break
+    check("no review's consent record is published", not _leaked,
+          f"{len(_leaked)} page(s)" + (f" e.g. {_leaked[:2]}" if _leaked else ""))
+
+    # A quote can only reach a page by being in the file. Typing a testimonial
+    # straight into a template is the failure this one exists to catch.
+    _file_quotes = {r["quote"].strip() for r in _rv
+                    if isinstance(r.get("quote"), str) and r["quote"].strip()}
+    _published = []
+    for f in html:
+        _published += re.findall(r'<span class="rvq">(.*?)</span>',
+                                 open(f, encoding="utf-8").read(), re.S)
+    _published = [_unescape(q).strip() for q in _published]
+    _unsourced = sorted({q for q in _published if q not in _file_quotes})
+    check("no published review quote is absent from the reviews file",
+          not _unsourced, f"{len(_unsourced)} quote(s) not in {a.reviews}")
+
+    # The home block renders at two reviews and shows at most three. One review
+    # on a home page reads worse than none, which is why the floor exists.
+    _home_p = os.path.join(site, "index.html")
+    _home_rv = 0
+    if os.path.exists(_home_p):
+        _home_src = open(_home_p, encoding="utf-8").read()
+        _home_rv = len(re.findall(r'<span class="rvq">', _home_src))
+    _want_home = 0 if len(_rv) < 2 else min(3, len(_rv))
+    check("the home page shows the number of reviews the rule allows",
+          _home_rv == _want_home, f"page {_home_rv}, rule {_want_home}")
+
+    # The page exists when there is something to put on it, and not before.
+    _rv_page = os.path.join(site, "reviews.html")
+    check("reviews.html exists exactly when a review does",
+          os.path.exists(_rv_page) == bool(_rv),
+          f"page {'exists' if os.path.exists(_rv_page) else 'absent'}, "
+          f"{len(_rv)} review(s)")
+    if os.path.exists(_rv_page) and _rv:
+        _listed = len(re.findall(r'<span class="rvq">',
+                                 open(_rv_page, encoding="utf-8").read()))
+        check("reviews.html lists every review in the file",
+              _listed == len(_rv), f"page {_listed}, file {len(_rv)}")
 
     # The header box on every page, with its script, pointing at the site root
     # from wherever that page sits.
