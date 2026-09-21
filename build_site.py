@@ -541,6 +541,23 @@ header p.sb{max-width:66ch;font-size:16px;line-height:1.55}
 .notes{border:1px solid var(--ln);border-radius:12px;background:var(--pn);padding:16px 18px;margin:24px 0 8px}
 .notes p{margin:0 0 9px;max-width:78ch}
 .notes p:last-child{margin-bottom:0}
+/* Reviews of the site. Quiet on purpose: a testimonial that shouts is the
+   first thing a sceptical reader discounts, and this audience is sceptical
+   by trade. One hairline rule per review, the words larger than the
+   attribution, and no stars - there is no rating, only what somebody said. */
+.rv{margin:22px 0 8px}
+.rv h2{margin:0 0 12px}
+.rvl{list-style:none;margin:0;padding:0;display:grid;gap:16px}
+/* display:block and no border, the same override .cols3 li and .srch-list li
+   already need: the site-wide li rule is display:flex with space-between and a
+   bottom border, written for the two-column index lists. Without this the
+   quote and the attribution sit side by side in two narrow columns instead of
+   stacking, which is what the first render of this block did. */
+.rvi{display:block;border:0;border-left:2px solid var(--ln);padding:2px 0 2px 14px;font-size:inherit}
+.rvq{display:block;color:var(--tx);font-size:15px;line-height:1.55;max-width:70ch}
+.rvw{display:block;margin-top:6px;color:var(--dm);font-size:12.5px}
+.rvw b{color:var(--tx);font-weight:600}
+.rvm{margin:12px 0 0;font-size:13px}
 table{width:100%;border-collapse:collapse;font-size:13.5px}
 th{text-align:left;color:var(--dm);font-weight:500;font-size:11px;text-transform:uppercase;
 letter-spacing:.06em;padding:8px;border-bottom:1px solid var(--ln)}
@@ -846,6 +863,114 @@ def sort_key(value) -> str:
     return "" if value is None else f' data-s="{value}"'
 
 
+# --------------------------------------------------------------------- reviews
+#
+# Reviews OF this site, collected by reply to the contact address and pasted
+# into reviews.json by hand. REVIEWS-DESIGN.md, option 1.
+#
+# Three rules from that design are enforced here in code, not left to care:
+#
+#   1. No invented review, ever, not even as placeholder text. There is no
+#      default, no sample and no fallback string anywhere below. With no file
+#      and with an empty file the site renders exactly what it renders today.
+#   2. Every review carries recorded consent to publish the person's name and
+#      their words. A missing or empty `consent` is a hard build failure, not
+#      a warning, because the failure mode is publishing a real name that
+#      nobody agreed to.
+#   3. No name goes up without the attribution the person agreed to. That is
+#      what `name` and `role` are, and both are required for the same reason.
+#
+# The home page shows at most three and only when there are two or more: one
+# review on a home page reads worse than none.
+
+REVIEWS: list[dict] = []
+REVIEWS_URL = "reviews.html"
+REVIEW_FIELDS = ("name", "role", "quote", "date", "consent")
+HOME_REVIEWS_MIN = 2      # below this the home block does not render at all
+HOME_REVIEWS_MAX = 3      # a block, not a wall
+
+
+def load_reviews(path: str) -> list[dict]:
+    """Every review in `path`, or an empty list when there is no file yet.
+
+    A missing file is the normal state and is not an error: it means nobody has
+    said anything yet. Everything else is an error, and is raised rather than
+    skipped. A review that cannot be published correctly must stop the build,
+    because the alternative is a real person's name on a public page under an
+    attribution they did not agree to.
+    """
+    if not path or not os.path.exists(path):
+        return []
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    if not isinstance(data, list):
+        raise ValueError(f"{path}: expected a list of reviews, got {type(data).__name__}")
+
+    seen: set[tuple] = set()
+    out: list[dict] = []
+    for i, r in enumerate(data):
+        where = f"{path}[{i}]"
+        if not isinstance(r, dict):
+            raise ValueError(f"{where}: expected an object, got {type(r).__name__}")
+        for f in REVIEW_FIELDS:
+            v = r.get(f)
+            if not isinstance(v, str) or not v.strip():
+                raise ValueError(
+                    f"{where}: '{f}' is required and must be a non-empty string. "
+                    f"Consent is recorded per review by design; a review without "
+                    f"it cannot be published.")
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", r["date"].strip()):
+            raise ValueError(f"{where}: 'date' must be YYYY-MM-DD, got {r['date']!r}")
+        link = (r.get("link") or "").strip()
+        if link and not link.startswith("https://"):
+            raise ValueError(f"{where}: 'link' must be https, got {link!r}")
+        key = (r["name"].strip().casefold(), r["quote"].strip().casefold())
+        if key in seen:
+            raise ValueError(f"{where}: the same person and quote appears twice")
+        seen.add(key)
+        out.append({f: r[f].strip() for f in REVIEW_FIELDS} | {"link": link})
+    return out
+
+
+def review_html(r: dict) -> str:
+    """One review. The quote is the reviewer's own words and is escaped, never
+    parsed as markup: it arrives from an email, which can contain anything."""
+    who = f'<b>{esc(r["name"])}</b>, {esc(r["role"])}'
+    if r.get("link"):
+        who = f'<a href="{esc(r["link"])}">{who}</a>'
+    return (f'<li class="rvi"><span class="rvq">{esc(r["quote"])}</span>'
+            f'<span class="rvw">{who}</span></li>')
+
+
+def reviews_block(depth: int = 0) -> str:
+    """The home-page block. Empty string below HOME_REVIEWS_MIN."""
+    if len(REVIEWS) < HOME_REVIEWS_MIN:
+        return ""
+    root = "../" * depth
+    shown = REVIEWS[:HOME_REVIEWS_MAX]
+    more = ""
+    if len(REVIEWS) > len(shown):
+        more = (f'<p class="rvm"><a href="{root}{REVIEWS_URL}">'
+                f'Read all {len(REVIEWS)} reviews &rarr;</a></p>')
+    else:
+        more = (f'<p class="rvm"><a href="{root}{REVIEWS_URL}">'
+                f'All reviews &rarr;</a></p>')
+    return ('<section class="rv" id="reviews"><h2>What people using it say</h2>'
+            '<ul class="rvl">' + "".join(review_html(r) for r in shown)
+            + "</ul>" + more + "</section>")
+
+
+def reviews_page_body() -> str:
+    """The body of reviews.html: every review, newest first by date."""
+    ordered = sorted(REVIEWS, key=lambda r: r["date"], reverse=True)
+    return ('<div class="crumb"><a href="index.html">Home</a> &rsaquo; Reviews</div>'
+            "<h2>Reviews</h2>"
+            '<p class="sb">Sent to the contact address by people using the site, '
+            'published with their permission. Nothing here is edited beyond '
+            'trimming, and nothing is written by us.</p>'
+            '<ul class="rvl">' + "".join(review_html(r) for r in ordered) + "</ul>")
+
+
 def page(title: str, desc: str, body: str, depth: int = 0, url: str = "",
          extra_notes: str = "") -> str:
     root = "../" * depth
@@ -862,6 +987,15 @@ def page(title: str, desc: str, body: str, depth: int = 0, url: str = "",
     can = (f'\n<link rel="canonical" href="{BASE_URL}/{declared_path(url)}">'
            if BASE_URL else "")
     badge = MAIDENSAIL_BADGE if url == "index.html" else ""
+    # One short block, home page only, directly below the notes panel. Gated the
+    # same way the directory badge is: this is social proof, and repeating it on
+    # 2,100 pages would read as a banner rather than as something people said.
+    reviews = reviews_block(depth) if url == "index.html" else ""
+    # The footer link is what makes reviews.html reachable when the home block
+    # is not rendering, which is every state with exactly one review. Without
+    # it that page would be an orphan the audit refuses.
+    rv_link = (f'<br><a href="{root}{REVIEWS_URL}">Reviews of this site</a>'
+               if REVIEWS else "")
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{esc(title)}</title>
@@ -886,6 +1020,7 @@ def page(title: str, desc: str, body: str, depth: int = 0, url: str = "",
 {body}
 <div class="notes"><p class="nb">{esc(NOT_A_TENDER_BOARD)}</p>
 <p>{esc(OPTION_YEARS)}</p>{extra_notes}</div>
+{reviews}
 {signup_block()}
 <footer>Built from the Government of Canada <strong>Proactive Publication of Contracts</strong>
 dataset (contracts over $10,000), Treasury Board of Canada Secretariat.
@@ -894,7 +1029,7 @@ Figures are <strong>total contract value over the full contract term</strong>, n
 spend. Only services and construction contracts are shown, where the published
 "Contract Period End Date or Delivery Date" field is defined as the end of the
 performance period. Published quarterly, so the most recent quarter may not appear.
-Not affiliated with the Government of Canada.{badge}</footer>
+Not affiliated with the Government of Canada.{rv_link}{badge}</footer>
 </div>{SORT_JS}
 <script src="{root}search.js" defer></script></body></html>"""
 
@@ -2199,6 +2334,17 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
              search_body, 0, "search.html"))
     urls.append("search.html")
 
+    # reviews.html exists only when there is something on it. A page built for
+    # an empty list is a page that says nobody has said anything, which is
+    # worse than not having the page.
+    if REVIEWS:
+        open(os.path.join(outdir, REVIEWS_URL), "w", encoding="utf-8").write(
+            page(f"Reviews | {SITE}",
+                 f"What people using {SITE} say about it, published with their "
+                 f"permission.",
+                 reviews_page_body(), 0, REVIEWS_URL))
+        urls.append(REVIEWS_URL)
+
     # ---- sitemap + robots
     # The sitemap protocol REQUIRES fully-qualified URLs. Relative paths are
     # rejected outright by Search Console, which would silently kill the entire
@@ -2281,6 +2427,12 @@ def main() -> int:
                          "Pass the same value to audit.py.")
     ap.add_argument("--base-url", default="",
                     help="full site URL, e.g. https://example.com — required for a\n                          valid sitemap; relative paths are rejected by Search Console")
+    ap.add_argument("--reviews", default="reviews.json",
+                    help="Reviews of this site, one object per review with name,\n"
+                         "role, quote, date and consent. A missing file means no\n"
+                         "reviews yet and renders nothing. A review missing its\n"
+                         "consent record fails the build. Pass the same value to\n"
+                         "audit.py.")
     args = ap.parse_args()
 
     global SIGNUP_ACTION
@@ -2367,6 +2519,12 @@ def main() -> int:
 
     global CATEGORY_MERGES
     CATEGORY_MERGES = load_category_merges(args.category_merges)
+
+    global REVIEWS
+    REVIEWS = load_reviews(args.reviews)
+    print(f"reviews        : {len(REVIEWS)}"
+          + ("" if len(REVIEWS) >= HOME_REVIEWS_MIN
+             else f" (home block needs {HOME_REVIEWS_MIN})"))
 
     rows = json.load(open(args.input, encoding="utf-8"))
     print(f"loaded {len(rows):,} contracts from {args.input}")
