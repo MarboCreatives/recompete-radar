@@ -1202,6 +1202,46 @@ def main() -> int:
         check("the resource-based tag on the home page matches the rule",
               _tags == _rule, f"page {_tags}, rule {_rule}")
 
+    # ---- the row must say what the work is, at every width ----------------
+    # The mobile rule used to hide nth-child(4) and (5). That is a POSITION,
+    # and contract_table() varies its columns by `show`: on the home page
+    # those two were Department and Category, but a department page and a
+    # category page carry six columns, so position 5 there was the bidder
+    # count. Both lost a number nobody chose to drop, and every page lost the
+    # only cells that said what the contract was for.
+    #
+    # Category is now a line under the incumbent name and Department is hidden
+    # BY CLASS. These four checks are what stop that regressing. Each one was
+    # proved able to fail before it shipped.
+    if os.path.exists(_home):
+        _src = open(_home, encoding="utf-8").read()
+        _m = re.search(r"<style>(.*?)</style>", _src, re.S)
+        _css = _m.group(1) if _m else ""
+
+        check("no contract column is hidden by position",
+              ".tw td:nth-child" not in _css and ".tw th:nth-child" not in _css,
+              "the mobile rule must name a class, not a position")
+
+        _hid = sorted(set(re.findall(r"\.tw td\.([a-z0-9-]+)\{display:none\}", _css)))
+        check("Department is the only column hidden on a phone",
+              _hid == ["c-dept"], f"hidden: {_hid or 'none'}")
+
+        check("a column hidden on a phone hides its header too",
+              bool(_hid) and all(f".tw th.{c}" in _css for c in _hid),
+              f"checked {_hid or 'none'}")
+
+        # One line per home-page row that has a category worth printing. A
+        # placeholder category has no page and no meaning, so it prints
+        # nothing — the em dash the column used to show is not a category.
+        _lines = _src.count('<span class="catline">')
+        _exp_cat = sum(
+            1 for r in _first
+            if not build_site.is_placeholder_category((r.get("category_name") or "").strip())
+            and ((r.get("category_name") or "").strip()
+                 or r.get("commodity_code") or ""))
+        check("every home-page row with a real category shows it under the incumbent",
+              _lines == _exp_cat, f"page {_lines}, rule {_exp_cat}")
+
     # The header box on every page, with its script, pointing at the site root
     # from wherever that page sits.
     s_nobox = []

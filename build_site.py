@@ -555,6 +555,14 @@ tr:hover td{background:#141821}
    because it describes the contract, not the supplier, and the incumbent
    column is the only one wide enough to carry a sentence. */
 .scope{display:block;color:var(--tx);font-size:12px;opacity:.82;margin-top:3px;max-width:34em}
+/* The procurement category, moved out of its own column to sit under the
+   incumbent name. A class of its own and NOT .scope: audit.py reads .scope to
+   check published buyer prose for personal names, and this is a category
+   label, so putting it in that span would widen a privacy check to cover text
+   it was not written for. */
+.catline{display:block;font-size:12px;margin-top:3px}
+.catline a{color:var(--dm)}
+.catline a:hover{color:var(--ac)}
 /* The "not a tender board" line. Sits directly under the tagline on every
    page, bordered so it reads as a statement of scope rather than blurb. */
 .nb{border-left:2px solid var(--ac);padding-left:9px;margin-top:7px;max-width:56em;font-size:13px}
@@ -609,10 +617,16 @@ padding:2px 6px;color:var(--tx)}
 .subf .subx select{flex:1 1 100%}}
 .tw{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 -4px;padding:0 4px}
 .tw table{min-width:560px}
+/* Below 560px only the Department column is dropped, and it is dropped BY
+   CLASS. The rule used to hide nth-child(4) and (5), which is a position, not
+   a column: contract_table() varies its columns by `show`, so on a department
+   page (six columns) nth-child(5) was the bidder count and on a category page
+   it was the bidder count too. Both lost a number nobody chose to drop.
+   Category is no longer a column at all - it sits under the incumbent name,
+   so a phone still says what the work is. */
 @media(max-width:560px){
   .tw table{min-width:0}
-  .tw th:nth-child(4),.tw td:nth-child(4){display:none}
-  .tw th:nth-child(5),.tw td:nth-child(5){display:none}
+  .tw th.c-dept,.tw td.c-dept{display:none}
 }
 footer{margin-top:44px;padding-top:16px;border-top:1px solid var(--ln);
 color:var(--dm);font-size:12px;line-height:1.7}
@@ -898,13 +912,15 @@ def contract_table(rows: list[dict], show: tuple[str, ...] = ("dept", "cat"),
     # data-s marks a column as sortable. Only the four numeric/ordinal columns
     # get it — sorting "Incumbent" alphabetically is a different feature and a
     # sort control that does nothing useful is worse than no control.
-    head = ("<tr><th data-s>Expires</th><th class='n' data-s>Value</th>"
-            "<th>Incumbent</th>")
+    # Every th and td carries a class naming the column it is. The mobile rule
+    # hides by that class, never by position - see the .tw media query.
+    head = ("<tr><th class='c-exp' data-s>Expires</th>"
+            "<th class='n c-val' data-s>Value</th>"
+            "<th class='c-inc'>Incumbent</th>")
     if "dept" in show:
-        head += "<th>Department</th>"
-    if "cat" in show:
-        head += "<th>Category</th>"
-    head += "<th class='n' data-s>Bidders</th><th data-s>Last time</th></tr>"
+        head += "<th class='c-dept'>Department</th>"
+    head += ("<th class='n c-bids' data-s>Bidders</th>"
+             "<th class='c-last' data-s>Last time</th></tr>")
 
     out = []
     for c in rows[:limit]:
@@ -957,31 +973,45 @@ def contract_table(rows: list[dict], show: tuple[str, ...] = ("dept", "cat"),
                       f'staffing contracts do not say so and are not marked.">'
                       f'{RESOURCE_LABEL}</span>')
         flags_html = f"<br>{flags}" if flags else ""
-        cells = [
-            f'<td{sort_key(days)}>{bucket_pill(c.get("expiry_bucket"))} '
-            f'<span class="d">{days}d</span></td>',
-            f'<td class="n"{sort_key(c.get("contract_value"))}>{money(c.get("contract_value"))}</td>',
-            f'<td>{entity_link("incumbent", c.get("vendor_key"), clip(c.get("vendor_name") or "—", 38), depth)}'
-            f'{ref_html}{flags_html}{scope_html}</td>',
-        ]
-        if "dept" in show:
-            dept_txt = clip((c.get("buyer_org") or "").split(" | ")[0], 38)
-            cells.append(f'<td class="d">{entity_link("department", c.get("buyer_org"), dept_txt, depth)}</td>')
+        # The category, now a line under the incumbent name instead of a column
+        # of its own. Below 560px the layout used to drop Department AND
+        # Category, which left a reader the holder of the contract and nothing
+        # about what it was for - the whole point of the row. Clipped at 60 and
+        # not 38: the narrow column was why it was 38, and the category names
+        # that most need reading are the long ones, such as "Other professional
+        # services not elsewhere specified".
+        #
+        # A placeholder category has no page to link to and no meaning to a
+        # reader, so it now renders nothing at all rather than the em dash the
+        # column used to print.
+        cat_html = ""
         if "cat" in show:
-            # A placeholder name has no page to link to, and printing it as
-            # plain text would put "#" in the Category column of every
-            # department and incumbent page that carries these rows.
             raw_cat = (c.get("category_name") or "").strip()
             # The category's own heading, not this row's spelling of it, so a
             # category the source writes three ways reads the same in every
             # table and matches the page the link opens.
             cat_name = CATEGORY_DISPLAY.get(c.get("category_key") or "") or raw_cat
-            cat_txt = ("—" if is_placeholder_category(raw_cat)
-                       else clip(cat_name or c.get("commodity_code") or "", 38))
-            cells.append(f'<td class="d">{entity_link("category", c.get("category_key"), cat_txt, depth)}</td>')
-        cells.append(f'<td class="n d"{sort_key(bids)}>'
+            if not is_placeholder_category(raw_cat):
+                cat_txt = clip(cat_name or c.get("commodity_code") or "", 60)
+                if cat_txt:
+                    cat_html = ('<span class="catline">'
+                                + entity_link("category", c.get("category_key"),
+                                              cat_txt, depth)
+                                + '</span>')
+
+        cells = [
+            f'<td class="c-exp"{sort_key(days)}>{bucket_pill(c.get("expiry_bucket"))} '
+            f'<span class="d">{days}d</span></td>',
+            f'<td class="n c-val"{sort_key(c.get("contract_value"))}>{money(c.get("contract_value"))}</td>',
+            f'<td class="c-inc">{entity_link("incumbent", c.get("vendor_key"), clip(c.get("vendor_name") or "—", 38), depth)}'
+            f'{ref_html}{flags_html}{cat_html}{scope_html}</td>',
+        ]
+        if "dept" in show:
+            dept_txt = clip((c.get("buyer_org") or "").split(" | ")[0], 38)
+            cells.append(f'<td class="d c-dept">{entity_link("department", c.get("buyer_org"), dept_txt, depth)}</td>')
+        cells.append(f'<td class="n d c-bids"{sort_key(bids)}>'
                      f'{bids if bids is not None else "—"}</td>')
-        cells.append(f'<td{sort_key(DENSITY_RANK.get(c.get("competition_density")))}>'
+        cells.append(f'<td class="c-last"{sort_key(DENSITY_RANK.get(c.get("competition_density")))}>'
                      f'{density_pill(c.get("competition_density"))}</td>')
         out.append("<tr>" + "".join(cells) + "</tr>")
     # Wrapped: a 6-column table on a 375px viewport otherwise pushes the whole
