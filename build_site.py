@@ -33,6 +33,7 @@ Design decisions that matter
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
 import json
 import os
@@ -1554,6 +1555,7 @@ val vance vaughn vern vernon victor vince virgil wallace wally walt walter ward
 warren waylon wayne webster weldon wendell wes wesley weston wilbert wilbur
 wiley wilfred wilfrid will willard willis wilmer wilson winston woodrow wyatt
 xavier zachary zane zeke
+kim yan
 """.split())
 
 # Names listed here are never suppressed. This is the correction channel for a
@@ -1617,6 +1619,50 @@ def _norm_name(name: str) -> str:
     return re.sub(r"\s+", " ", (name or "").strip()).lower()
 
 
+# Names the rules cannot reach, held as one-way hashes.
+#
+# A name is NEVER written into this file. Hard rule: no real person's name goes
+# in the repository, not even in a comment as an example. A sha256 of the
+# normalised name is not a name - it cannot be read, printed in a build log, or
+# lifted out of a public Actions artifact, which is how buyer_name leaked once
+# before.
+VENDOR_WITHHOLD: set[str] = set()
+
+
+def name_digest(name: str) -> str:
+    """The stable key for a name in vendor_withhold.txt.
+
+    _norm_name first, so the digest does not change with case or spacing, then
+    sha256. Anything that changes _norm_name changes every digest, which is why
+    drift.py watches both.
+    """
+    return hashlib.sha256(_norm_name(name).encode("utf-8")).hexdigest()
+
+
+def load_vendor_withhold(path: str) -> set[str]:
+    """One 64-character sha256 per line, # starts a comment.
+
+    A missing file is not an error: it means nothing is force-withheld. A line
+    that is not a hash IS an error, and is raised rather than skipped - a typo
+    here silently stops withholding a real person, and the whole point of the
+    file is that the rules already failed to catch them.
+    """
+    out: set[str] = set()
+    if not path or not os.path.exists(path):
+        return out
+    with open(path, encoding="utf-8") as fh:
+        for i, line in enumerate(fh, 1):
+            line = line.split("#", 1)[0].strip().lower()
+            if not line:
+                continue
+            if not re.fullmatch(r"[0-9a-f]{64}", line):
+                raise ValueError(
+                    f"{path}:{i}: expected a 64-character sha256, got {line[:16]!r}. "
+                    f"Never put a name in this file - hash it first.")
+            out.add(line)
+    return out
+
+
 def load_vendor_allowlist(path: str) -> set[str]:
     """One name per line, # starts a comment. Missing file is not an error."""
     out: set[str] = set()
@@ -1675,7 +1721,42 @@ def is_individual(name: str) -> bool:
             return True
     if len(core) >= 4 and core[0].lower() in GIVEN_NAMES:
         return True
+    if _is_dotted_initials(n, core):
+        return True
     return False
+
+
+def _is_dotted_initials(name: str, core: list[str]) -> bool:
+    """True for "P.J. FIELDING": dotted initials in front of a surname.
+
+    Rule 4. Rules 2 and 3 gate a short name on GIVEN_NAMES alone, and an
+    INITIALISED given name can never be in a list of given names, so a name of
+    this shape fell through all three and was published. That is the fault found
+    on the live site on 21 September 2026.
+
+    _name_tokens splits on dots, so "P.J. FIELDING" arrives as
+    ['P', 'J', 'FIELDING']: every token before the last is a single letter.
+
+    THE DOT IS THE WHOLE RULE, and it is deliberately narrow. Dropping it to
+    catch "JP Fielding" as well means matching "BC Hydro", "TK Elevator",
+    "SUN LIFE" and "KB Home", which are the same shape. Measured against the
+    live vendor list: with the dot, 10 names are newly withheld and 3 are
+    companies. Without it, 58 are newly withheld and 44 are companies - and
+    audit.py refuses that outright, because "a rule widened until everything
+    is a person protects nobody and hides the data".
+
+    A surname of three characters or more is required, which keeps "DNV GL" out
+    without anybody having to list it.
+    """
+    # Up to three initials, so "P.J.R. FIELDING" is covered as well as "P.J.".
+    # Four was not enough: audit.py's own shape gate caught the three-initial
+    # case failing while this rule was being written.
+    if not 2 <= len(core) <= 4 or "." not in name:
+        return False
+    last = core[-1]
+    if len(last) < 3 or not last.isalpha():
+        return False
+    return all(len(t) == 1 and t.isalpha() for t in core[:-1])
 
 
 def is_person_shaped(name: str) -> bool:
@@ -1828,6 +1909,14 @@ def suppress_individuals(rows: list[dict]) -> int:
     n = 0
     for r in rows:
         name = r.get("vendor_name") or ""
+        # The withhold list is checked FIRST and beats both the allowlist and
+        # the rules. It exists for a person no rule can reach, so a rule saying
+        # "not a person" is exactly the case it has to override.
+        if name and name_digest(name) in VENDOR_WITHHOLD:
+            r["vendor_name"] = PERSON_LABEL
+            r["vendor_key"] = ""
+            n += 1
+            continue
         if _norm_name(name) in VENDOR_ALLOWLIST:
             continue
         if is_individual(name):
@@ -2427,6 +2516,10 @@ def main() -> int:
                          "Pass the same value to audit.py.")
     ap.add_argument("--base-url", default="",
                     help="full site URL, e.g. https://example.com — required for a\n                          valid sitemap; relative paths are rejected by Search Console")
+    ap.add_argument("--vendor-withhold", default="vendor_withhold.txt",
+                    help="One-way hashes of supplier names that must always be\n"
+                         "withheld, for a person no rule reaches. Never holds a\n"
+                         "name. Pass the same value to audit.py.")
     ap.add_argument("--reviews", default="reviews.json",
                     help="Reviews of this site, one object per review with name,\n"
                          "role, quote, date and consent. A missing file means no\n"
@@ -2516,6 +2609,9 @@ def main() -> int:
 
     global VENDOR_ALLOWLIST
     VENDOR_ALLOWLIST = load_vendor_allowlist(args.vendor_allowlist)
+
+    global VENDOR_WITHHOLD
+    VENDOR_WITHHOLD = load_vendor_withhold(args.vendor_withhold)
 
     global CATEGORY_MERGES
     CATEGORY_MERGES = load_category_merges(args.category_merges)
