@@ -26,3 +26,22 @@ RAYMOND CHABOT GRANT THORNTON
 STEWART MCKELVEY
 RENE BLAIS LTE
 rene blaise lite
+
+# Added 21 September 2026 with is_individual rule 4, the dotted-initials test.
+#
+# Rule 4 withholds dotted initials in front of a surname, because an
+# initialised given name can never be in GIVEN_NAMES and so rules 2 and 3
+# could never reach it. That is how a real person was published and found on
+# 21 September.
+#
+# The rule cannot tell a person from a firm using the same form. Measured on
+# the live vendor list, rule 4 and the two given names added in the same
+# change withhold 10 names, of which 7 are people. These three are the firms.
+# Each was checked by hand against its contracts, value, postal prefix and
+# department before being listed here.
+#
+# The wider version of the rule was measured too and rejected: it withholds
+# 58 names of which 44 are companies, and audit.py refuses it by name.
+G.C. CARPENTRY
+R.M AUTOTECH
+S.S CONSTRUCTIONS

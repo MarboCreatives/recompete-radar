@@ -75,6 +75,9 @@ def main() -> int:
                          "mismatch between the two is a failure, so a workflow\n"
                          "that sets the flag for one and not the other cannot\n"
                          "pass.")
+    ap.add_argument("--vendor-withhold", default="vendor_withhold.txt",
+                    help="The same value passed to build_site.py.\n"
+                         "Hashes only; a name in that file is a failure here.")
     ap.add_argument("--reviews", default="reviews.json",
                     help="The same value passed to build_site.py --reviews.\n"
                          "These checks recompute what the pages should show\n"
@@ -96,6 +99,11 @@ def main() -> int:
     # index file. Held in memory only and never printed: this set IS the
     # personal information.
     _names_before = [_norm(r.get("vendor_name")) for r in rows]
+    # The RAW strings too, because the withhold list is keyed by sha256 of
+    # build_site._norm_name and audit's own _norm folds accents as well. Hashing
+    # the wrong normal form would make every entry look like a typo.
+    _raw_before = [(r.get("vendor_name") or "").strip() for r in rows]
+    build_site.VENDOR_WITHHOLD = build_site.load_vendor_withhold(a.vendor_withhold)
     withheld = build_site.suppress_individuals(rows)
     withheld_names = {before for before, r in zip(_names_before, rows)
                       if before and r.get("vendor_name") == build_site.PERSON_LABEL}
@@ -453,6 +461,74 @@ def main() -> int:
               and build_site._norm_name(n) not in build_site.VENDOR_ALLOWLIST}
     check("no individual person is listed as an incumbent", not leaked,
           "" if not leaked else f"{len(leaked)} still listed")
+    # ---- the allowlist and the withhold list ------------------------------
+    # Rule 4 is narrow on purpose, so these two files carry the cases it cannot
+    # reach: three firms it would withhold, and one person it cannot see. Both
+    # are now load-bearing, so both get a gate.
+    #
+    # Recomputed with build_site's OWN normaliser and digest, never audit's
+    # _norm: comparing across two normal forms turns a match into a miss.
+    _raw_set = {n for n in _raw_before if n}
+    _allow_seen = {n for n in _raw_set
+                   if build_site._norm_name(n) in build_site.VENDOR_ALLOWLIST}
+    # Tested on the OUTPUT, not on is_individual. The allowlist exists precisely
+    # for names the rules DO read as people - asserting is_individual is False
+    # for them asserts the opposite of the file's purpose, and fails on every
+    # entry that is doing its job. Found by running this against real data.
+    #
+    # A name in both files is withheld, by design, so those are excluded here.
+    _allow_withheld = sorted(
+        before for before, r in zip(_raw_before, rows)
+        if before in _allow_seen
+        and build_site.name_digest(before) not in build_site.VENDOR_WITHHOLD
+        and r.get("vendor_name") == build_site.PERSON_LABEL)
+    check("no allowlisted vendor is withheld", not _allow_withheld,
+          f"{len(_allow_withheld)} still withheld" if _allow_withheld
+          else f"{len(_allow_seen)} allowlisted names published")
+
+    _live_norm = {build_site._norm_name(n) for n in _raw_set}
+    _allow_dead = sorted(build_site.VENDOR_ALLOWLIST - _live_norm)
+    # Skipped on the fixture: 28 contracts cannot contain the firms this file
+    # exists for, so the warning would fire on every CI run and mean nothing.
+    if not a.allow_small:
+        check("every allowlist entry matches a live vendor name", not _allow_dead,
+              f"{len(_allow_dead)} of {len(build_site.VENDOR_ALLOWLIST)} match nothing",
+              warn_only=True)
+
+    # The file must hold hashes and nothing else. load_vendor_withhold raises on
+    # a bad line, so this asserts the same thing independently: a loader that
+    # stopped checking would otherwise let a name sit in a public repository.
+    _wh_bad = []
+    if os.path.exists(a.vendor_withhold):
+        for _i, _line in enumerate(open(a.vendor_withhold, encoding="utf-8"), 1):
+            _l = _line.split("#", 1)[0].strip().lower()
+            if _l and not re.fullmatch(r"[0-9a-f]{64}", _l):
+                _wh_bad.append(_i)
+    check("the withhold list holds only hashes, never a name", not _wh_bad,
+          f"line(s) {_wh_bad[:4]} are not a sha256" if _wh_bad
+          else f"{len(build_site.VENDOR_WITHHOLD)} hash(es)")
+
+    # A hash that matches a live name MUST have withheld it. This is the gate
+    # that catches suppression being reordered or skipped, which is the failure
+    # that publishes the one person no rule can see.
+    _wh_hit = {n for n in _raw_set
+               if build_site.name_digest(n) in build_site.VENDOR_WITHHOLD}
+    _still = sorted(before for before, r in zip(_raw_before, rows)
+                    if before in _wh_hit
+                    and r.get("vendor_name") != build_site.PERSON_LABEL)
+    check("every withhold-listed name is actually withheld", not _still,
+          f"{len(_still)} still published" if _still
+          else f"{len(_wh_hit)} of {len(build_site.VENDOR_WITHHOLD)} matched and withheld")
+
+    # A stale hash is possible - contracts expire and a supplier leaves the
+    # dataset. A MISTYPED hash looks identical from here and silently protects
+    # nobody, so this is a warning to read rather than a deploy to fail.
+    _wh_dead = len(build_site.VENDOR_WITHHOLD) - len(
+        {build_site.name_digest(n) for n in _wh_hit})
+    if not a.allow_small:
+        check("every withhold hash matches a live vendor name", _wh_dead == 0,
+              f"{_wh_dead} hash(es) match nothing", warn_only=True)
+
     check("individual vendor names are being withheld", withheld > 0,
           f"{withheld:,} withheld")
 
@@ -948,7 +1024,16 @@ def main() -> int:
     # ones are personal data and stay out of this repository.
     _shapes = [("a title in front of the given name", "Chief Dana Morgan Fields"),
                ("a French article inside the surname", "Dana La Fielding"),
-               ("a given name added on 2026-09-14", "Trevor Fielding")]
+               ("a given name added on 2026-09-14", "Trevor Fielding"),
+               # 21 September 2026. Rule 4, dotted initials in front of a
+               # surname: the shape that published a real person, because an
+               # initialised given name can never be in GIVEN_NAMES.
+               ("dotted initials in front of a surname", "P.J. Fielding"),
+               ("three dotted initials", "P.J.R. Fielding"),
+               # The same day: two given names the list was missing. Three
+               # people were published for want of these two words.
+               ("a given name added on 2026-09-21", "Kim Fielding"),
+               ("a second given name added on 2026-09-21", "Yan Fielding")]
     _missed = [lbl for lbl, nm in _shapes if not build_site.is_individual(nm)]
     check("the suppression rule still covers the shapes that escaped in September",
           not _missed, "; ".join(_missed) if _missed else "all three withheld")

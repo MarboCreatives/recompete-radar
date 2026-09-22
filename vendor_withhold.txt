@@ -1,0 +1,34 @@
+# Supplier names that must ALWAYS be withheld, held as one-way hashes.
+#
+# NO NAME IS EVER WRITTEN IN THIS FILE. Each line is sha256 of the name after
+# _norm_name(). Hard rule: a real person's name does not go in the repository,
+# not even in a comment as an example. A digest cannot be read, printed in a
+# build log, or lifted out of a public Actions artifact - which is how
+# buyer_name leaked once before.
+#
+# This file exists because a shape rule cannot always work. The name below is a
+# person; another supplier of the identical string shape is a housebuilder. The
+# only rule that separates them withholds 44 real companies to catch 4 people,
+# and audit.py refuses that on principle: "a rule widened until everything is a
+# person protects nobody and hides the data."
+#
+# suppress_individuals() checks this file FIRST. It beats vendor_allowlist.txt
+# and it beats is_individual() returning False, because overriding the rules is
+# the entire job.
+#
+# To add an entry:
+#
+#   py -c "import build_site as b; print(b.name_digest('Name As Published'))"
+#
+# and paste the line it prints. Keep the comment above each entry factual and
+# carrying nothing that identifies the person - a contract number is enough.
+#
+# One hash per line. '#' starts a comment. A line that is not a 64-character
+# sha256 raises, rather than being skipped: a typo here silently stops
+# withholding somebody the rules already failed to catch.
+
+# Found published on the live site 21 September 2026. Recorded by contract
+# number in handoffs/BUG-brief-individual-names-2026-09-21.md so the name did
+# not have to be repeated, and confirmed an individual by Jon on the same day.
+# Initials with no dot, so rule 4 cannot see it.
+0dd53f916d8dee49a779b48c6088459661b18c68dd7f32424cb171db71f64b74
