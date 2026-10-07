@@ -1687,9 +1687,9 @@ def is_individual(name: str) -> bool:
        411 matches. Weaker, hence the allowlist.
     3. A LONGER name that opens with a given name and carries no corporate word
        anywhere. This is the sole trader who registered under their own name and
-       then described the work: "SVETLANA DAMNJANOVIC PREDUZETNIK KONSULTANTSKE
-       USLUGE", "DAVID LITTLE O/A PACIFICWIND POWERWASHING", "PIERRE JEAN OUELLET
-       R PSYCH". Rule 2's three-token ceiling misses every one of them, and the
+       then described the work. Three real examples were quoted here until
+       7 October 2026; they were taken out, because they are names these rules
+       withhold. Rule 2's three-token ceiling misses every one of them, and the
        trailing description is in whatever language the vendor registered in, so
        CORP_WORDS will never cover it.
 
@@ -1738,15 +1738,16 @@ def _is_dotted_initials(name: str, core: list[str]) -> bool:
     ['P', 'J', 'FIELDING']: every token before the last is a single letter.
 
     THE DOT IS THE WHOLE RULE, and it is deliberately narrow. Dropping it to
-    catch "JP Fielding" as well means matching "BC Hydro", "TK Elevator",
-    "SUN LIFE" and "KB Home", which are the same shape. Measured against the
-    live vendor list: with the dot, 10 names are newly withheld and 3 are
+    catch "JP Fielding" as well means matching well-known companies of the
+    same shape. Four of them were named here until 7 October 2026; they
+    were taken out, because real supplier names do not belong in the source. Measured against the live vendor list: with the dot, 10 names are newly withheld and 3 are
     companies. Without it, 58 are newly withheld and 44 are companies - and
     audit.py refuses that outright, because "a rule widened until everything
     is a person protects nobody and hides the data".
 
-    A surname of three characters or more is required, which keeps "DNV GL" out
-    without anybody having to list it.
+    A surname of three characters or more is required, which keeps a firm
+    named by two short abbreviations out (one was named here until 7 October 2026) without
+    anybody having to list it.
     """
     # Up to three initials, so "P.J.R. FIELDING" is covered as well as "P.J.".
     # Four was not enough: audit.py's own shape gate caught the three-initial
