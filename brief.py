@@ -273,6 +273,7 @@ def self_test() -> int:
     # but the brief reads the pipeline JSON directly, where vendor_name is raw.
     person = [mk(365, vendor_name="TREMBLAY, Marie")]
     build_site.VENDOR_ALLOWLIST = set()
+    build_site.VENDOR_WITHHOLD = set()
     build_site.suppress_individuals(person)
     for fn in (render_text, render_html):
         out = fn(crossings(person, today), today, "B", "A", "https://x")
@@ -298,6 +299,7 @@ def self_test() -> int:
                           ("given name added 2026-09-14", "Trevor Fielding")):
         row = [mk(365, vendor_name=vendor)]
         build_site.VENDOR_ALLOWLIST = set()
+        build_site.VENDOR_WITHHOLD = set()
         build_site.suppress_individuals(row)
         for fn in (render_text, render_html):
             out = fn(crossings(row, today), today, "B", "A", "https://x")
@@ -306,6 +308,30 @@ def self_test() -> int:
             elif build_site.PERSON_LABEL not in out:
                 fails.append(f"5c. {fn.__name__} dropped the withheld label "
                              f"for a {label} name")
+
+    # 5d. The withhold list. It exists for the person no rule can reach, so the
+    # name here is one the rules let through: invented, two plain words, a
+    # given name not on GIVEN_NAMES. The control proves the rules alone would
+    # publish it; the test proves the list stops it. Before 7 October 2026
+    # main() never loaded the list, so the brief published exactly this case.
+    ghost = "Zephyr Quillon"
+    for withhold, expect_withheld in ((set(), False),
+                                      ({build_site.name_digest(ghost)}, True)):
+        row = [mk(365, vendor_name=ghost)]
+        build_site.VENDOR_ALLOWLIST = set()
+        build_site.VENDOR_WITHHOLD = withhold
+        build_site.suppress_individuals(row)
+        for fn in (render_text, render_html):
+            out = fn(crossings(row, today), today, "B", "A", "https://x")
+            shown = "Quillon" in out
+            if expect_withheld and shown:
+                fails.append(f"5d. {fn.__name__} published a name on the withhold list")
+            elif expect_withheld and build_site.PERSON_LABEL not in out:
+                fails.append(f"5d. {fn.__name__} dropped the withheld label")
+            elif not expect_withheld and not shown:
+                fails.append(f"5d. control: {fn.__name__} withheld a name with "
+                             f"an empty list, so the test proves nothing")
+    build_site.VENDOR_WITHHOLD = set()
 
     # 6. HTML escaping of hostile vendor names
     xss = [mk(365, vendor_name='<script>alert(1)</script>')]
@@ -377,6 +403,13 @@ def main() -> int:
     # this the email sends out the individual names the site withholds.
     build_site.VENDOR_ALLOWLIST = build_site.load_vendor_allowlist(
         "vendor_allowlist.txt")
+    # The withhold list, loaded the same way build_site.main() and audit.main()
+    # load it. Missing until 7 October 2026: the pages and the search index
+    # withheld the listed person, and this email did not. Only the count is
+    # printed; the list itself is the personal information.
+    build_site.VENDOR_WITHHOLD = build_site.load_vendor_withhold(
+        "vendor_withhold.txt")
+    print(f"withhold list: {len(build_site.VENDOR_WITHHOLD):,} entries")
     withheld = build_site.suppress_individuals(rows)
     print(f"withheld {withheld:,} individual vendor names")
     sel = crossings(rows, as_of)
