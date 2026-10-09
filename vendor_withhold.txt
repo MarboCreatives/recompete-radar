@@ -89,3 +89,12 @@ f1f1b4a33d24efd46c86822a0846db0eecd7f8e91956ceb02af21769a49b1d95
 f248c08a0606b7ee0f7fdc8d2af1e14dd1e6b16f85b7018408eb3397801a5efd
 f25290ee025e0722124d85bd507b6dfa399dde34d83c06b4d4f97589fad8e87b
 f769ccee417ad3a6c0983adfae55e1304e90e07520035dfce9edddcede8fb247
+
+# The 7 October 2026 trading-names list, kept off GitHub on Jon's PC like the
+# list above: two names the site published that contain a name from the
+# 21 September list and no business word such as Inc, Ltd or Canada, so each
+# could be a person trading under their own name. Jon, 7 October 2026:
+# withhold both until he marks them. Marked C (company), a hash comes off
+# this file; marked P (person), it stays.
+95e924a6b10dd08ce5e906e128d09e4f5a6f5db5be8ae0342c4fe509e39a420b
+e7d19a00776d615e25f954b95ed81d9c90b513695705893db6fb3ca8a26f2065
