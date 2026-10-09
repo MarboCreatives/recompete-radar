@@ -71,10 +71,13 @@ jobs:
             --question "$BRIEF_QUESTION" \
             --note "$BRIEF_NOTE"
 
+      # Counts only. The brief names suppliers, and this log is public and kept
+      # for 90 days, against the artifact's 30: a supplier withheld after the
+      # brief ran would stay readable here. The text is in the artifact.
       - name: Show the summary in the run log
         run: |
-          echo "----- plain text brief -----"
-          cat brief.txt
+          echo "brief.txt: $(grep -c '^\* ' brief.txt || true) contracts listed, $(wc -l < brief.txt) lines"
+          echo "The brief itself is in the weekly-brief artifact, not in this log."
 
       - name: Upload the brief
         uses: actions/upload-artifact@v4
