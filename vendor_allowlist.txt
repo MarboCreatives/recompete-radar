@@ -40,8 +40,12 @@ rene blaise lite
 # Each was checked by hand against its contracts, value, postal prefix and
 # department before being listed here.
 #
+# One of the three is no longer listed. It is also on the 21 September
+# company-or-person list, which Jon has not marked, and on 9 October 2026 he
+# kept it withheld: vendor_withhold.txt holds its hash. If he marks it C
+# (company), its line comes back here and its hash comes off.
+#
 # The wider version of the rule was measured too and rejected: it withholds
 # 58 names of which 44 are companies, and audit.py refuses it by name.
-G.C. CARPENTRY
 R.M AUTOTECH
 S.S CONSTRUCTIONS
