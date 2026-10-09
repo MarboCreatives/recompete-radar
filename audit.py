@@ -1039,9 +1039,12 @@ def main() -> int:
           not _missed, "; ".join(_missed) if _missed else "all three withheld")
 
     # A rule widened until everything is a person protects nobody and hides the
-    # data. These six must stay published.
-    _firms = ["Le Groupe Conseil", "LA CAPITALE", "SUN LIFE", "BC Hydro",
-              "GFL Environmental", "AGILENT TECHNOLOGIES CANADA INC"]
+    # data. These six must stay published. The fourth and fifth are made-up
+    # names in the shapes of two real suppliers that are withheld until Jon
+    # marks them (9 October 2026); a name the site withholds is never written
+    # in this file.
+    _firms = ["Le Groupe Conseil", "LA CAPITALE", "SUN LIFE", "KD Tarvo",
+              "KDR Pellworthiane", "AGILENT TECHNOLOGIES CANADA INC"]
     _swallowed = [f for f in _firms if build_site.is_individual(f)]
     check("the widened rule still treats plain company names as companies",
           not _swallowed,
