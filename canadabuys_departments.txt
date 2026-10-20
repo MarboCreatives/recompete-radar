@@ -14,6 +14,12 @@
 # nothing for a quoted phrase with that hyphen: Agriculture and Agri-Food
 # Canada, and the CRTC. Checked 20 October 2026.
 #
+# Transport Canada is the one entry that keeps the bracketed acronym, as
+# CanadaBuys shows it: "Department of Transport (TC)". Without it the phrase
+# also matches other governments' departments of transportation, and most
+# results were not Transport Canada's (5 of 45 open services notices, 20
+# October 2026); with it, 5 of 6 were.
+#
 # "none": no Search link on that department's rows. A department missing from
 # this file gets no link either, and the audit warns until it is added.
 Canada Revenue Agency | Canada Revenue Agency
@@ -49,7 +55,7 @@ Public Prosecution Service of Canada | Office of the Director of Public Prosecut
 Department of Housing, Infrastructure and Communities | Office of Infrastructure of Canada
 Indigenous Services Canada | Department of Indigenous Services
 Environment and Climate Change Canada | Department of the Environment
-Transport Canada | Department of Transport
+Transport Canada | Department of Transport (TC)
 Women and Gender Equality Canada | Department of Women and Gender Equality
 National Gallery of Canada | none | no tender notice in CanadaBuys data names it
 Statistics Canada | Statistics Canada
