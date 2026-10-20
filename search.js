@@ -58,6 +58,14 @@
     org = quote(org); ref = quote(ref);
     return org && ref ? 'https://search.open.canada.ca/contracts/record/' + org + '%2C' + ref : '';
   }
+  // words is already encoded by build_site.py (cb_words), so this adds
+  // nothing of its own: 154 is CanadaBuys's Services filter, 155 Construction.
+  function cbUrl(words, construction) {
+    if (!words) return '';
+    var n = construction ? '155' : '154';
+    return 'https://canadabuys.canada.ca/en/tender-opportunities?words=%22' + words +
+           '%22&status%5B87%5D=87&category%5B' + n + '%5D=' + n;
+  }
 
   function english(name) { return String(name || '').split(' | ')[0]; }
 
@@ -271,8 +279,10 @@
         loading = getJSON('search-contracts.json').then(function (j) {
           // Row: ref, supplier index, department index, category index,
           // value, days to expiry, buyer org code, description, bidders,
-          // how contested it was last time, supplier country, resource-based.
-          // Lookups: suppliers [text, link, key], departments [name, link],
+          // how contested it was last time, supplier country, resource-based,
+          // and a 13th field, 1, on construction rows only.
+          // Lookups: suppliers [text, link, key], departments [name, link,
+          // CanadaBuys name as encoded in the link, or ""],
           // categories [name, link, key].
           S = j.suppliers; D = j.departments; C = j.categories;
           rows = j.contracts.map(function (c) {
@@ -281,6 +291,7 @@
                      ci: c[3], c: k[0], ch: k[1], ck: k[2] || '',
                      val: c[4], days: c[5], src: sourceUrl(c[6], c[0]), sc: c[7] || '',
                      bids: c[8], dens: c[9] || '', cc: c[10] || '', res: c[11] === 1,
+                     cb: cbUrl(d[2], c[12] === 1),
                      k: ' ' + norm([c[0], v[0], d[0], k[0], c[7] || ''].join(' ')) };
           });
           return rows;
@@ -679,6 +690,19 @@
             span.textContent = r.ref;
           }
           inc.appendChild(span);
+        }
+        // Search CanadaBuys: the same address build_site.py writes on the
+        // pages, made only from the department and the type. A row with no
+        // reference still gets it, on its own line.
+        if (r.cb) {
+          inc.appendChild(r.ref ? document.createTextNode(' ') : el('br'));
+          var cbs = el('span', 'cb');
+          var cba = el('a', null, 'Search CanadaBuys');
+          cba.href = r.cb;
+          cba.rel = 'nofollow noopener';
+          cba.title = 'Open tenders from this department on CanadaBuys';
+          cbs.appendChild(cba);
+          inc.appendChild(cbs);
         }
         if (r.res) {
           inc.appendChild(el('br'));
