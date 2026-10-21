@@ -59,6 +59,22 @@ NOT_A_TENDER_BOARD = (
     "the point is to see a renewal coming while there is still time to talk to "
     "the department. Open tenders are posted on CanadaBuys.")
 
+# Two links out to CanadaBuys (Jon, 17 and 20 October 2026). Every contract row
+# gets a "Search CanadaBuys" link that opens CanadaBuys already searching that
+# row's department and type of work, and every page gets one "How to bid" link
+# to the government's own guide, beside the line above. The search link carries
+# the department's CanadaBuys name and the type and nothing else from the row:
+# no supplier, no scope text, no reference number. The names come from
+# canadabuys_departments.txt, read once; the build makes no network call.
+HOW_TO_BID_URL = "https://canadabuys.canada.ca/en/getting-started/preparing-sell-government"
+CANADABUYS_SEARCH = "https://canadabuys.canada.ca/en/tender-opportunities"
+# CanadaBuys's own category filter: 154 is Services, 155 is Construction. The
+# site carries only those two commodity types, S and C.
+CANADABUYS_CATEGORY = {"S": 154, "C": 155}
+# English department name -> CanadaBuys name, or None for a department marked
+# "none". Set in main() from the table.
+CANADABUYS_TERMS: dict[str, Optional[str]] = {}
+
 # Raised by a retired federal procurement officer, Aug 2026, and it is the
 # single most important limit on how these dates should be read. A contract is
 # often a short base period plus option years. The disclosure data publishes
@@ -569,6 +585,9 @@ tr:hover td{background:#141821}
 /* Contract reference number: present for anyone who needs to quote it to a
    department, visually subordinate so it doesn't compete with the vendor name. */
 .ref{color:var(--dm);font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;opacity:.75}
+/* Search CanadaBuys, after the Watch link on the same line. Kept on one line so
+   a narrow cell wraps before the link, never inside it. */
+.cb{font-size:12px;white-space:nowrap}
 /* The buyer's own note on what the work is. Set below the incumbent name
    because it describes the contract, not the supplier, and the incumbent
    column is the only one wide enough to carry a sentence. */
@@ -1019,7 +1038,7 @@ def page(title: str, desc: str, body: str, depth: int = 0, url: str = "",
 </nav>
 <div class="srchw" id="rr-search" data-root="{root}" hidden></div></header>
 {body}
-<div class="notes"><p class="nb">{esc(NOT_A_TENDER_BOARD)}</p>
+<div class="notes"><p class="nb">{esc(NOT_A_TENDER_BOARD)} <a href="{HOW_TO_BID_URL}" rel="noopener">How to bid</a></p>
 <p>{esc(OPTION_YEARS)}</p>{extra_notes}</div>
 {reviews}
 {signup_block()}
@@ -1086,6 +1105,13 @@ def contract_table(rows: list[dict], show: tuple[str, ...] = ("dept", "cat"),
         watch_html = contract_watch_html(c)
         if watch_html:
             ref_html = f"{ref_html} {watch_html}" if ref_html else f"<br>{watch_html}"
+
+        # After the Watch link, never between it and the .ref span: audit.py's
+        # ROW_PAIR needs the Watch span directly after the .ref span. A row with
+        # no reference or no Watch link still gets it.
+        cb_html = canadabuys_html(c)
+        if cb_html:
+            ref_html = f"{ref_html} {cb_html}" if ref_html else f"<br>{cb_html}"
 
         # What the contract is actually for, when the buyer wrote it down and
         # the text passes the name scan. This is the field readers asked for:
@@ -1661,6 +1687,63 @@ def load_vendor_withhold(path: str) -> set[str]:
                     f"Never put a name in this file - hash it first.")
             out.add(line)
     return out
+
+
+def load_canadabuys_terms(path: str) -> dict[str, Optional[str]]:
+    """canadabuys_departments.txt: 'Site department | CanadaBuys name', or
+    'Site department | none | reason'. # starts a comment.
+
+    A missing file is an error, not an empty table: it would drop every Search
+    link from the site without a word. So is a malformed line, or a department
+    listed twice.
+    """
+    out: dict[str, Optional[str]] = {}
+    with open(path, encoding="utf-8") as fh:
+        for i, line in enumerate(fh, 1):
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            parts = [p.strip() for p in line.rstrip("\n").split(" | ")]
+            if len(parts) == 2 and parts[0] and parts[1] and parts[1].lower() != "none":
+                dept, term = parts
+            elif len(parts) == 3 and parts[0] and parts[1].lower() == "none" and parts[2]:
+                dept, term = parts[0], None
+            else:
+                raise ValueError(f"{path}:{i}: expected 'department | CanadaBuys name' "
+                                 f"or 'department | none | reason'")
+            if dept in out:
+                raise ValueError(f"{path}:{i}: {dept!r} is listed twice")
+            out[dept] = term
+    return out
+
+
+def canadabuys_url(row: dict) -> Optional[str]:
+    """The Search CanadaBuys address for one contract row, or None.
+
+    Built from the department's CanadaBuys name and the commodity type only.
+    None when the department has no name in the table, or is marked "none",
+    or the type is neither services nor construction.
+    """
+    dept = str(row.get("buyer_org") or "").split(" | ")[0].strip()
+    term = CANADABUYS_TERMS.get(dept)
+    n = CANADABUYS_CATEGORY.get(str(row.get("commodity_type") or "").strip().upper())
+    if not term or not n:
+        return None
+    return (f"{CANADABUYS_SEARCH}?words=%22{urllib.parse.quote_plus(term)}%22"
+            f"&status%5B87%5D=87&category%5B{n}%5D={n}")
+
+
+def cb_words(buyer_org) -> str:
+    """The department's CanadaBuys name as it sits in the link, or ""."""
+    term = CANADABUYS_TERMS.get(str(buyer_org or "").split(" | ")[0].strip())
+    return urllib.parse.quote_plus(term) if term else ""
+
+
+def canadabuys_html(row: dict) -> str:
+    url = canadabuys_url(row)
+    if not url:
+        return ""
+    return (f'<span class="cb"><a href="{esc(url)}" rel="nofollow noopener"'
+            f' title="Open tenders from this department on CanadaBuys">Search CanadaBuys</a></span>')
 
 
 def load_vendor_allowlist(path: str) -> set[str]:
@@ -2372,7 +2455,11 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
             str(r.get("reference_number") or ""),
             ix("suppliers", r.get("vendor_name") or "", entity_href("incumbent", r.get("vendor_key")),
                r.get("vendor_key") or ""),
-            ix("departments", r.get("buyer_org") or "", entity_href("department", r.get("buyer_org"))),
+            # The third field is the department's CanadaBuys name, already
+            # encoded the way canadabuys_url() writes it, so search.js builds
+            # the same address; "" for a department with no name.
+            ix("departments", r.get("buyer_org") or "", entity_href("department", r.get("buyer_org")),
+               cb_words(r.get("buyer_org"))),
             ix("categories", " ".join(cats[ckey]["display"].split()) if ckey else "",
                entity_href("category", ckey) if ckey else "", ckey),
             round(r.get("contract_value") or 0),
@@ -2384,6 +2471,11 @@ def build(rows: list[dict], outdir: str, base_url: str = "") -> dict:
             str(r.get("country_of_vendor") or "").strip().upper(),
             1 if is_resource_based(r.get("comments_en")) else 0,
         ])
+        # A 13th field only on construction rows, so the 9 in 10 that are
+        # services add nothing to the file: search.js reads its absence as
+        # services, for the CanadaBuys category.
+        if str(r.get("commodity_type") or "").strip().upper() == "C":
+            contract_rows[-1].append(1)
 
     def write_search_file(name: str, lists: dict) -> None:
         """One entry per line, so the file can still be read and diffed."""
@@ -2506,6 +2598,10 @@ def main() -> int:
     ap.add_argument("--category-merges", default=os.path.join(
                         os.path.dirname(os.path.abspath(__file__)), "category_merges.txt"),
                     help="Reviewed category merges, 'from => to' per line.")
+    ap.add_argument("--canadabuys-departments", default=os.path.join(
+                        os.path.dirname(os.path.abspath(__file__)), "canadabuys_departments.txt"),
+                    help="Each department's CanadaBuys name, for the Search\n"
+                         "CanadaBuys link. Missing file fails the build.")
     ap.add_argument("--google-verification", default="",
                     help="Google Search Console token (the content=\"...\" value\n"
                          "only, not the whole meta tag).")
@@ -2616,6 +2712,15 @@ def main() -> int:
 
     global CATEGORY_MERGES
     CATEGORY_MERGES = load_category_merges(args.category_merges)
+
+    global CANADABUYS_TERMS
+    try:
+        CANADABUYS_TERMS = load_canadabuys_terms(args.canadabuys_departments)
+    except (OSError, ValueError) as e:
+        print(f"ERROR: --canadabuys-departments: {e}", file=sys.stderr)
+        return 4
+    print(f"canadabuys     : {sum(1 for t in CANADABUYS_TERMS.values() if t)} departments "
+          f"with a name, {sum(1 for t in CANADABUYS_TERMS.values() if not t)} marked none")
 
     global REVIEWS
     REVIEWS = load_reviews(args.reviews)

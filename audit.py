@@ -82,6 +82,11 @@ def main() -> int:
                     help="The same value passed to build_site.py --reviews.\n"
                          "These checks recompute what the pages should show\n"
                          "from this file rather than trusting the generator.")
+    ap.add_argument("--canadabuys-departments", default=os.path.join(
+                        os.path.dirname(os.path.abspath(__file__)), "canadabuys_departments.txt"),
+                    help="The same value passed to build_site.py. Read again\n"
+                         "here, by this file's own parser, to check every\n"
+                         "Search CanadaBuys link.")
     ap.add_argument("--allow-small", action="store_true",
                     help="Skip the plausibility floors and widen the landing-page\n"
                          "value tolerance. For the offline fixture check ONLY: a\n"
@@ -92,6 +97,32 @@ def main() -> int:
     a = ap.parse_args()
 
     rows = json.load(open(a.input, encoding="utf-8"))
+
+    # The CanadaBuys table, parsed here again rather than through build_site,
+    # so a fault in the builder's reading of it shows as a disagreement.
+    # dept (English half of buyer_org) -> CanadaBuys name, or None for "none".
+    cb_table, cb_bad_lines = {}, []
+    if os.path.exists(a.canadabuys_departments):
+        for i, line in enumerate(open(a.canadabuys_departments, encoding="utf-8"), 1):
+            t = line.strip()
+            if not t or t.startswith("#"):
+                continue
+            parts = [p.strip() for p in t.split(" | ")]
+            if len(parts) == 2 and parts[0] and parts[1] and parts[1].lower() != "none" \
+                    and parts[0] not in cb_table:
+                cb_table[parts[0]] = parts[1]
+            elif len(parts) == 3 and parts[0] and parts[1].lower() == "none" and parts[2] \
+                    and parts[0] not in cb_table:
+                cb_table[parts[0]] = None
+            else:
+                cb_bad_lines.append(i)
+
+    def cb_dept(buyer_org) -> str:
+        return str(buyer_org or "").split(" | ")[0].strip()
+
+    def cb_words_of(buyer_org) -> str:
+        term = cb_table.get(cb_dept(buyer_org))
+        return urllib.parse.quote_plus(term) if term else ""
 
     build_site.VENDOR_ALLOWLIST = build_site.load_vendor_allowlist("vendor_allowlist.txt")
     # The names as the source publishes them, taken BEFORE suppression, so the
@@ -1011,6 +1042,127 @@ def main() -> int:
               f"pages that should not have one: {sorted(pages_with_supplier_link - incumbent_pages)[:3]}")
     check("no page headed with a withheld name carries a supplier Watch link", not person_page_watch,
           f"{len(person_page_watch)}: " + ", ".join(person_page_watch[:3]))
+
+    # ---- CanadaBuys links (Jon, 17 and 20 October 2026) ---------------------
+    #
+    # Every contract row carries one "Search CanadaBuys" link, made from its
+    # department's name in canadabuys_departments.txt and its commodity type,
+    # and nothing else; a department marked "none" gets no link. Every page
+    # carries exactly one "How to bid" link. The expected link is worked out
+    # here from the DATA, through the row's source-record link, never by asking
+    # build_site what it meant to write.
+    CB_HOW_TO_BID = "https://canadabuys.canada.ca/en/getting-started/preparing-sell-government"
+    CB_CATEGORY = {"S": "154", "C": "155"}
+    CB_ANY = re.compile(r'href="(https://canadabuys\.canada\.ca/en/tender-opportunities[^"]*)"')
+    CB_LINK = re.compile(r'<a href="(https://canadabuys\.canada\.ca/en/tender-opportunities[^"]*)"'
+                         r'[^>]*>Search CanadaBuys</a>')
+    CB_SHAPE = re.compile(r'https://canadabuys\.canada\.ca/en/tender-opportunities\?words=%22([^"&]+)%22'
+                          r'&status%5B87%5D=87&category%5B(154|155)%5D=(154|155)')
+    CB_BETWEEN = re.compile(r'<span class="ref">(?:(?!</span>).)*?</span>\s*<span class="cb">', re.S)
+    BID_LINK = re.compile(r'<a href="([^"]*)"[^>]*>How to bid</a>')
+    TR = re.compile(r"<tr>(.*?)</tr>", re.S)
+    REF_HREF = re.compile(r'<span class="ref"><a href="([^"]+)"')
+
+    check("the CanadaBuys table is present and every line is well formed",
+          bool(cb_table) and not cb_bad_lines,
+          f"{len(cb_table)} departments read" if cb_table and not cb_bad_lines else
+          f"file {'missing or empty' if not cb_table else 'present'}; bad lines {cb_bad_lines[:5]}")
+    cb_terms = {t for t in cb_table.values() if t}
+
+    def cb_expected(r):
+        term = cb_table.get(cb_dept(r.get("buyer_org")))
+        n = CB_CATEGORY.get(str(r.get("commodity_type") or "").strip().upper())
+        if not term or not n:
+            return None
+        return (f"https://canadabuys.canada.ca/en/tender-opportunities?words=%22"
+                f"{urllib.parse.quote_plus(term)}%22&status%5B87%5D=87&category%5B{n}%5D={n}")
+
+    cb_by_pair = defaultdict(set)
+    for r in rows:
+        pair = (str(r.get("buyer_org_code") or "").strip(), str(r.get("reference_number") or "").strip())
+        cb_by_pair[pair].add(cb_expected(r))
+
+    cb_bad_shape, cb_bad_term, cb_stray = [], [], []
+    cb_missing, cb_unexpected, cb_wrong_cat, cb_wrong_term, cb_twice = [], [], [], [], []
+    cb_between, bid_bad = [], []
+    cb_total = cb_rows_none = cb_rows_noref = 0
+    cb_depts_linked, cb_depts_unlinked = set(), set()
+    for p in html:
+        src = open(p, encoding="utf-8").read()
+        rel = os.path.relpath(p, site).replace(os.sep, "/")
+        links = [_unescape(u) for u in CB_LINK.findall(src)]
+        cb_total += len(links)
+        if len(CB_ANY.findall(src)) != len(links):
+            cb_stray.append(rel)
+        for u in links:
+            m = CB_SHAPE.fullmatch(u)
+            if not m or m.group(2) != m.group(3) \
+                    or urllib.parse.quote_plus(urllib.parse.unquote_plus(m.group(1))) != m.group(1):
+                cb_bad_shape.append(f"{rel}:{u[:90]}")
+            elif urllib.parse.unquote_plus(m.group(1)) not in cb_terms:
+                cb_bad_term.append(rel)
+        if CB_BETWEEN.search(src):
+            cb_between.append(rel)
+        bids = BID_LINK.findall(src)
+        if len(bids) != 1 or _unescape(bids[0]) != CB_HOW_TO_BID or src.count(CB_HOW_TO_BID) != 1:
+            bid_bad.append(f"{rel}: {len(bids)} How to bid link(s)")
+        for row in TR.findall(src):
+            if 'class="c-inc"' not in row:
+                continue
+            got = [_unescape(u) for u in CB_LINK.findall(row)]
+            refm = REF_HREF.search(row)
+            if not refm:
+                # No source link to look the row up by. None exist in the data
+                # today; such a row may carry at most one well-shaped link.
+                cb_rows_noref += 1
+                if len(got) > 1:
+                    cb_twice.append(rel)
+                continue
+            tail = _unescape(refm.group(1))[len(SOURCE_BASE):]
+            halves = tuple(urllib.parse.unquote(x) for x in tail.split("%2C"))
+            want = cb_by_pair.get(halves, set())
+            if len(got) > 1:
+                cb_twice.append(f"{rel}:{halves[-1]}")
+            elif not got:
+                if want and want != {None}:
+                    cb_missing.append(f"{rel}:{halves[-1]}")
+                else:
+                    cb_rows_none += 1
+            elif got[0] not in want:
+                if want == {None} or not want:
+                    cb_unexpected.append(f"{rel}:{halves[-1]}")
+                elif any(w and w.split("&category")[0] == got[0].split("&category")[0] for w in want):
+                    cb_wrong_cat.append(f"{rel}:{halves[-1]}")
+                else:
+                    cb_wrong_term.append(f"{rel}:{halves[-1]}")
+
+    for r in live:
+        (cb_depts_linked if cb_expected(r) else cb_depts_unlinked).add(cb_dept(r.get("buyer_org")))
+    cb_unlisted = sorted(d for d in {cb_dept(r.get("buyer_org")) for r in live} if d not in cb_table)
+
+    check("every Search CanadaBuys link has the exact shape, and a name from the table",
+          not cb_bad_shape and not cb_bad_term and not cb_stray and cb_total > 0,
+          f"{cb_total:,} links" if not (cb_bad_shape or cb_bad_term or cb_stray) and cb_total else
+          f"{cb_total:,} links; bad shape {len(cb_bad_shape)} {cb_bad_shape[:2]}; name not in table "
+          f"{len(cb_bad_term)} {cb_bad_term[:2]}; other CanadaBuys search links on {cb_stray[:2]}")
+    check("every Search CanadaBuys link's category matches its row's type", not cb_wrong_cat,
+          f"{len(cb_wrong_cat)}: " + ", ".join(cb_wrong_cat[:3]))
+    check("every Search CanadaBuys link names its row's own department", not cb_wrong_term,
+          f"{len(cb_wrong_term)}: " + ", ".join(cb_wrong_term[:3]))
+    check("every row of a department with a CanadaBuys name has the link, once", not cb_missing and not cb_twice,
+          f"missing {len(cb_missing)} {cb_missing[:3]}; more than one {len(cb_twice)} {cb_twice[:3]}")
+    check('no row of a department marked "none" has the link', not cb_unexpected,
+          f"{len(cb_unexpected)}: " + ", ".join(cb_unexpected[:3]) if cb_unexpected else
+          f"{cb_rows_none:,} rows without a link; {len(cb_depts_unlinked)} departments")
+    check("no Search CanadaBuys link sits between a row's .ref span and its Watch link", not cb_between,
+          f"{len(cb_between)} pages: " + ", ".join(cb_between[:3]))
+    check("every page has exactly one How to bid link, to the guide", not bid_bad,
+          f"{len(bid_bad)}: " + ", ".join(bid_bad[:3]) if bid_bad else f"{len(html):,} pages")
+    check("every live department is in the CanadaBuys table", not cb_unlisted,
+          f"{len(cb_unlisted)} with no line, so no link: " + ", ".join(cb_unlisted[:3]), warn_only=True)
+    _row_pairs = sum(len(ROW_PAIR.findall(open(p, encoding="utf-8").read())) for p in html) if APP_URL else 0
+    print(f"[INFO] ROW_PAIR rows {_row_pairs:,}; rows with no source link {cb_rows_noref}; "
+          f"departments with a link {len(cb_depts_linked)}, without {len(cb_depts_unlinked)}")
     # ---- The suppression rule still covers the shapes that once escaped ----
     #
     # Every other name check here uses is_individual as its own oracle, so none
@@ -1084,8 +1236,10 @@ def main() -> int:
         for e in s_ents)
     s_sup, s_dep, s_cat = ((s_con or {}).get(k) for k in ("suppliers", "departments", "categories"))
     s_cons = (s_con or {}).get("contracts")
-    cons_ok = (_pairs(s_sup, 3) and _pairs(s_dep) and _pairs(s_cat, 3) and isinstance(s_cons, list)
-               and all(isinstance(c, list) and len(c) == 12
+    # Departments carry a third field since 20 October 2026, the encoded
+    # CanadaBuys name; construction rows a 13th, 1, and services rows none.
+    cons_ok = (_pairs(s_sup, 3) and _pairs(s_dep, 3) and _pairs(s_cat, 3) and isinstance(s_cons, list)
+               and all(isinstance(c, list) and (len(c) == 12 or (len(c) == 13 and c[12] == 1))
                        and c[11] in (0, 1) and isinstance(c[10], str)
                        and isinstance(c[1], int) and 0 <= c[1] < len(s_sup)
                        and isinstance(c[2], int) and 0 <= c[2] < len(s_dep)
@@ -1102,7 +1256,7 @@ def main() -> int:
         s_sup, s_dep, s_cat, s_cons = [], [], [], []
     # Each contract with its supplier, department and category resolved.
     s_full = [(c[0], s_sup[c[1]], s_dep[c[2]], s_cat[c[3]], c[4], c[5], c[6], c[7], c[8], c[9],
-               c[10], c[11])
+               c[10], c[11], c[12] if len(c) == 13 else 0)
               for c in s_cons]
 
     # Gzipped size is what a reader downloads. The entity file loads from every
@@ -1204,10 +1358,25 @@ def main() -> int:
                      r.get("number_of_bids"), r.get("competition_density") or "",
                      r.get("vendor_key") or "", norm_cat(r),
                      str(r.get("country_of_vendor") or "").strip().upper(),
-                     1 if build_site.is_resource_based(r.get("comments_en")) else 0)
+                     1 if build_site.is_resource_based(r.get("comments_en")) else 0,
+                     cb_words_of(r.get("buyer_org")),
+                     1 if str(r.get("commodity_type") or "").strip().upper() == "C" else 0)
                     for r in live)
     _have = Counter((f[0], f[1][0], f[2][0], f[4], f[5], f[6], f[8], f[9],
-                     f[1][2], f[3][2], f[10], f[11]) for f in s_full)
+                     f[1][2], f[3][2], f[10], f[11], f[2][2], f[12]) for f in s_full)
+    # search.js builds the search results' Search CanadaBuys link itself, from
+    # the encoded name the file carries (checked just below, in the contract
+    # file comparison) and the construction flag. Its template must be the
+    # pages' exact shape: the same base, parameters and category numbers.
+    _js = open(os.path.join(site, "search.js"), encoding="utf-8").read() if s_js else ""
+    _js_parts = ["'https://canadabuys.canada.ca/en/tender-opportunities?words=%22' + words +",
+                 "'%22&status%5B87%5D=87&category%5B' + n + '%5D=' + n",
+                 "var n = construction ? '155' : '154';",
+                 "cb: cbUrl(d[2], c[12] === 1)",
+                 "'Search CanadaBuys'"]
+    check("search.js builds the Search CanadaBuys link in the pages' exact shape",
+          all(x in _js for x in _js_parts),
+          "missing: " + "; ".join(x for x in _js_parts if x not in _js)[:200])
     check("the contract search file holds every live contract as the data names it",
           _want == _have,
           f"{sum(_have.values()):,} rows" if _want == _have else

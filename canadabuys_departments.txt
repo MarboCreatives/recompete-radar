@@ -1,0 +1,116 @@
+# Each site department, by the English half of its name as the contract data
+# writes it, and the organization name CanadaBuys uses for it. build_site.py
+# reads this file to make the "Search CanadaBuys" link on every contract row;
+# audit.py reads it again to check every link. Department names only.
+#
+#   Site department | CanadaBuys name
+#   Site department | none | why there is no link
+#
+# A CanadaBuys name passes only when it is an organization name in CanadaBuys's
+# own tender notice data (all notices from 2022-08-08, any status), written as
+# CanadaBuys writes it, without the acronym in brackets. Where a department has
+# used more than one, the one on its notices of the last 12 months is used.
+# Two are the hyphen-free or longer form, because CanadaBuys's search finds
+# nothing for a quoted phrase with that hyphen: Agriculture and Agri-Food
+# Canada, and the CRTC. Checked 20 October 2026.
+#
+# Transport Canada is the one entry that keeps the bracketed acronym, as
+# CanadaBuys shows it: "Department of Transport (TC)". Without it the phrase
+# also matches other governments' departments of transportation, and most
+# results were not Transport Canada's (5 of 45 open services notices, 20
+# October 2026); with it, 5 of 6 were.
+#
+# "none": no Search link on that department's rows. A department missing from
+# this file gets no link either, and the audit warns until it is added.
+Canada Revenue Agency | Canada Revenue Agency
+Employment and Social Development Canada | Department of Employment and Social Development
+Global Affairs Canada | Department of Foreign Affairs, Trade and Development
+Immigration, Refugees and Citizenship Canada | Department of Citizenship & Immigration
+National Defence | Department of National Defence
+Public Services and Procurement Canada | Department of Public Works and Government Services
+Royal Canadian Mounted Police | Royal Canadian Mounted Police
+Immigration and Refugee Board of Canada | Immigration and Refugee Board
+Innovation, Science and Economic Development Canada | Department of Industry
+Shared Services Canada | Shared Services Canada
+Fisheries and Oceans Canada | Department of Fisheries and Oceans
+Canadian Grain Commission | Canadian Grain Commission
+National Research Council Canada | National Research Council of Canada
+Parks Canada | Parks Canada Agency
+Elections Canada | Office of the Chief Electoral Officer
+Correctional Service of Canada | Correctional Service of Canada
+Health Canada | Department of Health
+Public Safety Canada | Department of Public Safety and Emergency Preparedness
+Agriculture and Agri-Food Canada | Agriculture and Agri-Food Canada
+Canada Border Services Agency | Canada Border Services Agency
+Canadian Space Agency | Canadian Space Agency
+National Film Board | National Film Board of Canada
+Office of the Privacy Commissioner of Canada | Office of the Privacy Commissioner of Canada
+Public Health Agency of Canada | Public Health Agency of Canada
+Department of Justice Canada | Department of Justice
+Office of the Superintendent of Financial Institutions Canada | Office of the Superintendent of Financial Institutions
+Department of Finance Canada | Department of Finance
+Financial Transactions and Reports Analysis Centre of Canada | Financial Transactions and Reports Analysis Centre of Canada
+Canadian Institutes of Health Research | Canadian Institutes of Health Research
+Public Prosecution Service of Canada | Office of the Director of Public Prosecutions
+Department of Housing, Infrastructure and Communities | Office of Infrastructure of Canada
+Indigenous Services Canada | Department of Indigenous Services
+Environment and Climate Change Canada | Department of the Environment
+Transport Canada | Department of Transport (TC)
+Women and Gender Equality Canada | Department of Women and Gender Equality
+National Gallery of Canada | none | no tender notice in CanadaBuys data names it
+Statistics Canada | Statistics Canada
+Canadian Centre for Occupational Health and Safety | Canadian Centre for Occupational Health and Safety
+Treasury Board of Canada Secretariat | Treasury Board
+Canadian Nuclear Safety Commission | Canadian Nuclear Safety Commission
+Crown-Indigenous Relations and Northern Affairs Canada | Crown-Indigenous Relations and Northern Affairs Canada
+Natural Resources Canada | Department of Natural Resources
+Office of the Auditor General of Canada | Office of the Auditor General
+Public Service Commission of Canada | Public Service Commission
+Canada Energy Regulator | Canada Energy Regulator
+Canadian Food Inspection Agency | Canadian Food Inspection Agency
+Canadian Heritage | Department of Canadian Heritage
+Canadian Radio-television and Telecommunications Commission | Canadian Radio Television and Telecommunications Commission
+Library and Archives Canada | Library and Archives of Canada
+Office of the Commissioner for Federal Judicial Affairs Canada | Office of the Commissioner for Federal Judicial Affairs
+Office of the Public Sector Integrity Commissioner of Canada | Office of the Public Sector Integrity Commissioner of Canada
+Privy Council Office | Privy Council Office
+Financial Consumer Agency of Canada | Financial Consumer Agency of Canada
+Invest in Canada | Invest in Canada HUB
+Polar Knowledge Canada | Polar Knowledge Canada
+Office of the Commissioner of Lobbying of Canada | Office of the Commissioner of Lobbying
+Law Commission of Canada | none | no tender notice in CanadaBuys data names it
+Federal Economic Development Agency for Northern Ontario | Federal Economic Development Agency for Northern Ontario
+Office of the Commissioner of Official Languages | none | no tender notice in CanadaBuys data names it
+Accessibility Standards Canada | Canadian Accessibility Standards Development Organization
+Courts Administration Service | Courts Administration Service
+Impact Assessment Agency of Canada | Impact Assessment Agency of Canada
+Pacific Economic Development Canada | Pacific Economic Development Canada
+Administrative Tribunals Support Service of Canada | Administrative Tribunals Support Service of Canada
+International Joint Commission | none | no tender notice in CanadaBuys data names it
+Natural Sciences and Engineering Research Council of Canada | Natural Sciences and Engineering Research Council
+Patented Medicine Prices Review Board Canada | Patented Medicine Prices Review Board
+Prairies Economic Development Canada | Prairies Economic Development Canada
+Social Sciences and Humanities Research Council of Canada | Social Sciences and Humanities Research Council
+The Correctional Investigator Canada | Office of the Correctional Investigator
+Veterans Affairs Canada | Department of Veterans Affairs
+Atlantic Canada Opportunities Agency | Atlantic Canada Opportunities Agency
+Canada School of Public Service | Canada School of Public Service
+Farm Products Council of Canada | none | no tender notice in CanadaBuys data names it
+Federal Economic Development Agency for Southern Ontario | Federal Economic Development Agency for Southern Ontario
+Canada Economic Development for Quebec Regions | Economic Development Agency of Canada for the Regions of Quebec
+Canada Water Agency | none | no tender notice in CanadaBuys data names it
+Canadian Human Rights Commission | Canadian Human Rights Commission
+Canadian Transportation Agency | Canadian Transportation Agency
+Military Police Complaints Commission of Canada | Military Police Complaints Commission
+Office of the Secretary to the Governor General | Office of the Secretary to the Governor General
+Office of the Information Commissioner of Canada | none | CanadaBuys names it only jointly with the Privacy Commissioner
+Transportation Safety Board of Canada | Canadian Transportation Accident Investigation and Safety Board
+Canadian Intergovernmental Conference Secretariat | Canadian Intergovernmental Conference Secretariat
+Canadian Northern Economic Development Agency | Canadian Northern Economic Development Agency
+Military Grievances External Review Committee | Military Grievances External Review Committee
+National Security and Intelligence Review Agency | National Security and Intelligence Review Agency
+Parole Board of Canada | Parole Board of Canada
+RCMP External Review Committee | none | no tender notice in CanadaBuys data names it
+The National Battlefields Commission | National Battlefields Commission
+Veterans Review and Appeal Board | none | no tender notice in CanadaBuys data names it
+Civilian Review and Complaints Commission for the RCMP | Civilian Review and Complaints Commission for the RCMP
