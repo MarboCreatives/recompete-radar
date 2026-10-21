@@ -585,9 +585,15 @@ tr:hover td{background:#141821}
 /* Contract reference number: present for anyone who needs to quote it to a
    department, visually subordinate so it doesn't compete with the vendor name. */
 .ref{color:var(--dm);font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;opacity:.75}
-/* Search CanadaBuys, after the Watch link on the same line. Kept on one line so
-   a narrow cell wraps before the link, never inside it. */
-.cb{font-size:12px;white-space:nowrap}
+/* Watch and Search CanadaBuys each on a line of their own, under the reference
+   number (Jon, 21 October 2026: side by side they read as one link). Blocks,
+   not a <br>: audit.py's ROW_PAIR needs the .watch span straight after the
+   .ref span. Search CanadaBuys is kept on one line, so it never wraps inside. */
+.watch{display:block}
+.cb{display:block;font-size:12px;white-space:nowrap}
+/* A block already ends its line, so the <br> that opens the flags line after
+   it would leave a blank line. Hidden, in CSS, so the markup stays as it is. */
+.watch + br,.cb + br{display:none}
 /* The buyer's own note on what the work is. Set below the incumbent name
    because it describes the contract, not the supplier, and the incumbent
    column is the only one wide enough to carry a sentence. */
@@ -609,6 +615,12 @@ border-radius:4px;padding:1px 5px;margin-top:4px;margin-right:4px}
 .flag.no{color:var(--ht);border-color:rgba(255,107,107,.4)}
 td a{color:inherit;text-decoration:none;border-bottom:1px solid var(--ln)}
 td a:hover{color:var(--ac);border-bottom-color:var(--ac)}
+/* The two action links in a row, in the link blue with a blue underline, so
+   they read as things to click and not as text. One class more specific than
+   "td a" above, which sets every table link to the text colour. Hover turns
+   them to the text colour, the reverse of every other table link. */
+.watch a,.cb a{color:var(--ac);border-bottom:1px solid var(--ac)}
+.watch a:hover,.cb a:hover{color:var(--tx);border-bottom-color:var(--tx)}
 .p{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10.5px;font-weight:600}
 .hot{background:rgba(255,107,107,.17);color:var(--ht)}
 .warn{background:rgba(255,180,84,.17);color:var(--wn)}
