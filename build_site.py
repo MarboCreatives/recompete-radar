@@ -61,8 +61,9 @@ NOT_A_TENDER_BOARD = (
 
 # Two links out to CanadaBuys (Jon, 17 and 20 October 2026). Every contract row
 # gets a "Search CanadaBuys" link that opens CanadaBuys already searching that
-# row's department and type of work, and every page gets one "How to bid" link
-# to the government's own guide, beside the line above. The search link carries
+# row's department and type of work, and every page gets one "New to federal
+# bidding?" link to the government's own guide, in the header beside the brief
+# link (moved there from the notes on 21 October 2026). The search link carries
 # the department's CanadaBuys name and the type and nothing else from the row:
 # no supplier, no scope text, no reference number. The names come from
 # canadabuys_departments.txt, read once; the build makes no network call.
@@ -477,10 +478,18 @@ def signup_cta() -> str:
     this is a swap, not an addition, so the header word count does not creep
     back up the way it did before the redesign.
     """
+    # Jon, 21 October 2026: the beginner guide goes up front, right after the
+    # brief link, because new visitors find the site daunting and a link in the
+    # notes at the bottom is missed. It shows with no signup form too, in the
+    # same spot. Two no-break spaces then a normal one make the gap, so on a
+    # narrow screen the second link wraps to its own line with no indent.
+    new_to_bidding = (f'<a class="bid" href="{HOW_TO_BID_URL}" rel="noopener">'
+                      f'<strong>New to federal bidding? &rarr;</strong></a>')
     if not SIGNUP_ACTION:
-        return ""
+        return f'<p class="sb">{new_to_bidding}</p>'
     return (f'<p class="sb">{VALUE_LINE} '
-            f'<a href="#brief"><strong>Get the free weekly brief &rarr;</strong></a></p>')
+            f'<a href="#brief"><strong>Get the free weekly brief &rarr;</strong></a>'
+            f'&nbsp;&nbsp; {new_to_bidding}</p>')
 
 
 def signup_block() -> str:
@@ -555,6 +564,9 @@ h2{font-size:21px;font-weight:700;letter-spacing:-.018em;margin:38px 0 12px}
 .eyebrow{font-family:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
  font-size:12px;font-weight:500;letter-spacing:.18em;text-transform:uppercase;color:var(--ac);margin:0 0 12px}
 header p.sb{max-width:66ch;font-size:16px;line-height:1.55}
+/* New to federal bidding?, after the brief link: it may wrap to its own line on
+   a phone, but never breaks inside itself. */
+.bid{white-space:nowrap}
 .notes{border:1px solid var(--ln);border-radius:12px;background:var(--pn);padding:16px 18px;margin:24px 0 8px}
 .notes p{margin:0 0 9px;max-width:78ch}
 .notes p:last-child{margin-bottom:0}
@@ -1050,7 +1062,7 @@ def page(title: str, desc: str, body: str, depth: int = 0, url: str = "",
 </nav>
 <div class="srchw" id="rr-search" data-root="{root}" hidden></div></header>
 {body}
-<div class="notes"><p class="nb">{esc(NOT_A_TENDER_BOARD)} <a href="{HOW_TO_BID_URL}" rel="noopener">How to bid</a></p>
+<div class="notes"><p class="nb">{esc(NOT_A_TENDER_BOARD)}</p>
 <p>{esc(OPTION_YEARS)}</p>{extra_notes}</div>
 {reviews}
 {signup_block()}
