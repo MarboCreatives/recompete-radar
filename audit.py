@@ -1048,7 +1048,9 @@ def main() -> int:
     # Every contract row carries one "Search CanadaBuys" link, made from its
     # department's name in canadabuys_departments.txt and its commodity type,
     # and nothing else; a department marked "none" gets no link. Every page
-    # carries exactly one "How to bid" link. The expected link is worked out
+    # carries exactly one "New to federal bidding? →" link to the guide, in
+    # its header, and no "How to bid" link (moved from the notes to the header,
+    # 21 October 2026). The expected link is worked out
     # here from the DATA, through the row's source-record link, never by asking
     # build_site what it meant to write.
     CB_HOW_TO_BID = "https://canadabuys.canada.ca/en/getting-started/preparing-sell-government"
@@ -1059,7 +1061,13 @@ def main() -> int:
     CB_SHAPE = re.compile(r'https://canadabuys\.canada\.ca/en/tender-opportunities\?words=%22([^"&]+)%22'
                           r'&status%5B87%5D=87&category%5B(154|155)%5D=(154|155)')
     CB_BETWEEN = re.compile(r'<span class="ref">(?:(?!</span>).)*?</span>\s*<span class="cb">', re.S)
-    BID_LINK = re.compile(r'<a href="([^"]*)"[^>]*>How to bid</a>')
+    # The link text as a reader sees it, tags and entities removed, so a
+    # change to its markup that keeps the words still counts as the link.
+    ANCHOR = re.compile(r'<a\b[^>]*\bhref="([^"]*)"[^>]*>(.*?)</a>', re.S)
+    NEW_TO_BIDDING = "New to federal bidding? →"
+
+    def anchor_text(inner):
+        return " ".join(_unescape(re.sub(r"<[^>]+>", "", inner)).split())
     TR = re.compile(r"<tr>(.*?)</tr>", re.S)
     REF_HREF = re.compile(r'<span class="ref"><a href="([^"]+)"')
 
@@ -1084,7 +1092,7 @@ def main() -> int:
 
     cb_bad_shape, cb_bad_term, cb_stray = [], [], []
     cb_missing, cb_unexpected, cb_wrong_cat, cb_wrong_term, cb_twice = [], [], [], [], []
-    cb_between, bid_bad = [], []
+    cb_between, bid_bad, how_to_bid_left = [], [], []
     cb_total = cb_rows_none = cb_rows_noref = 0
     cb_depts_linked, cb_depts_unlinked = set(), set()
     for p in html:
@@ -1103,9 +1111,17 @@ def main() -> int:
                 cb_bad_term.append(rel)
         if CB_BETWEEN.search(src):
             cb_between.append(rel)
-        bids = BID_LINK.findall(src)
-        if len(bids) != 1 or _unescape(bids[0]) != CB_HOW_TO_BID or src.count(CB_HOW_TO_BID) != 1:
-            bid_bad.append(f"{rel}: {len(bids)} How to bid link(s)")
+        anchors = [(_unescape(h), anchor_text(t)) for h, t in ANCHOR.findall(src)]
+        header = src.split("<header>", 1)[1].split("</header>", 1)[0] if "<header>" in src else ""
+        in_header = [(_unescape(h), anchor_text(t)) for h, t in ANCHOR.findall(header)]
+        new_links = [h for h, t in anchors if t == NEW_TO_BIDDING]
+        new_in_header = [h for h, t in in_header if t == NEW_TO_BIDDING]
+        if (len(new_links) != 1 or len(new_in_header) != 1 or new_in_header[0] != CB_HOW_TO_BID
+                or src.count(CB_HOW_TO_BID) != 1):
+            bid_bad.append(f"{rel}: {len(new_links)} link(s), {len(new_in_header)} in the header, "
+                           f"guide address {src.count(CB_HOW_TO_BID)} time(s)")
+        if any(t.lower() == "how to bid" for _h, t in anchors):
+            how_to_bid_left.append(rel)
         for row in TR.findall(src):
             if 'class="c-inc"' not in row:
                 continue
@@ -1156,8 +1172,11 @@ def main() -> int:
           f"{cb_rows_none:,} rows without a link; {len(cb_depts_unlinked)} departments")
     check("no Search CanadaBuys link sits between a row's .ref span and its Watch link", not cb_between,
           f"{len(cb_between)} pages: " + ", ".join(cb_between[:3]))
-    check("every page has exactly one How to bid link, to the guide", not bid_bad,
+    check("every page has exactly one New to federal bidding link, in the header, to the guide", not bid_bad,
           f"{len(bid_bad)}: " + ", ".join(bid_bad[:3]) if bid_bad else f"{len(html):,} pages")
+    check("no page has a How to bid link", not how_to_bid_left,
+          f"{len(how_to_bid_left)}: " + ", ".join(how_to_bid_left[:3]) if how_to_bid_left else
+          f"{len(html):,} pages")
     check("every live department is in the CanadaBuys table", not cb_unlisted,
           f"{len(cb_unlisted)} with no line, so no link: " + ", ".join(cb_unlisted[:3]), warn_only=True)
     _row_pairs = sum(len(ROW_PAIR.findall(open(p, encoding="utf-8").read())) for p in html) if APP_URL else 0
