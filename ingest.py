@@ -8,9 +8,10 @@ portal, normalizes them, deduplicates amendments, and derives the recompete
 signal (which contracts expire when, held by whom, how contested).
 
 Source : Proactive Publication - Contracts (contracts over $10,000)
-         open.canada.ca CKAN datastore, resource fac950c0-00d5-4ec1-a4d3-9cbebf98a305
+         open.canada.ca resource fac950c0-00d5-4ec1-a4d3-9cbebf98a305, read as
+         the published CSV file (not the CKAN datastore API; see "Fetching")
 Licence: Open Government Licence - Canada
-Volume : ~1.31M rows total; the recompete window is a small subset.
+Volume : ~1.34M rows, ~655 MB; the recompete window is a small subset.
 
 FIELD SEMANTICS (verified against the published TBS schema):
   delivery_date        "Contract Period End Date or Delivery Date"
@@ -34,10 +35,13 @@ Usage
 from __future__ import annotations
 
 import argparse
+import csv
+import hashlib
 import json
 import os
 import sqlite3
 import sys
+import tempfile
 import time
 import urllib.parse
 import urllib.request
@@ -46,10 +50,37 @@ from dataclasses import dataclass, asdict, field
 from datetime import date, datetime, timedelta
 from typing import Any, Iterable, Iterator, Optional
 
-CKAN_BASE = "https://open.canada.ca/data/api/action/datastore_search"
+CKAN_ACTION = "https://open.canada.ca/data/api/action"
 RESOURCE_ID = "fac950c0-00d5-4ec1-a4d3-9cbebf98a305"
-PAGE_SIZE = 5000
 USER_AGENT = "recompete-radar/1.0 (Open Government Licence data ingest)"
+DOWNLOAD_CHUNK = 1 << 20
+
+# The published CSV's columns, as the file carried them on 5 November 2026. They
+# are the datastore API's record keys exactly, minus the datastore's own `_id`,
+# so normalize() reads a CSV row with the same field names it always read. A
+# file whose columns differ in any way stops the run: a renamed column would
+# otherwise arrive as a blank in every row, and a site built from that looks
+# perfectly fine.
+EXPECTED_COLUMNS = (
+    "reference_number", "procurement_id", "vendor_name", "vendor_postal_code",
+    "buyer_name", "contract_date", "economic_object_code", "description_en",
+    "description_fr", "contract_period_start", "delivery_date", "contract_value",
+    "original_value", "amendment_value", "comments_en", "comments_fr",
+    "additional_comments_en", "additional_comments_fr", "agreement_type_code",
+    "trade_agreement", "land_claims", "commodity_type", "commodity_code",
+    "country_of_vendor", "solicitation_procedure", "limited_tendering_reason",
+    "trade_agreement_exceptions", "indigenous_business",
+    "indigenous_business_excluding_psib", "intellectual_property",
+    "potential_commercial_exploitation", "former_public_servant",
+    "contracting_entity", "standing_offer_number", "instrument_type",
+    "ministers_office", "number_of_bids", "article_6_exceptions",
+    "award_criteria", "socioeconomic_indicator", "reporting_period",
+    "owner_org", "owner_org_title",
+)
+
+# Exact duplicate rows above this share of the file stop the run. The real file
+# held none on 5 November 2026; the datastore that day held every row twice.
+MAX_DUPLICATE_SHARE = 0.01
 
 # Only these commodity types have unambiguous end-date semantics.
 # S = services, C = construction services. G (goods) is excluded by default.
@@ -378,63 +409,173 @@ def filter_recompete(
 # Fetching
 # --------------------------------------------------------------------------
 
-def fetch_page(offset: int, limit: int = PAGE_SIZE, retries: int = 4) -> dict:
-    params = urllib.parse.urlencode(
-        {"resource_id": RESOURCE_ID, "limit": limit, "offset": offset}
-    )
-    url = f"{CKAN_BASE}?{params}"
-    last_error: Optional[Exception] = None
+# Why the CSV and not the datastore API. Until October 2026 this paged
+# datastore_search 5,000 rows at a time. On 5 November 2026 the API capped pages
+# at 1,000, answered deep offsets with 504 Gateway Time-out (the monthly refresh
+# died after 74,000 rows), and reported 2,672,292 rows: exactly twice the
+# 1,336,146 in the published file, because the portal had loaded the file into
+# the datastore twice. The file itself downloaded in under a minute, whole.
+#
+# Three things replace the API's row total as the completeness check, because a
+# truncated or doubled source is the most dangerous silent failure here: it
+# produces a perfectly self-consistent site built from the wrong data.
+#   1. Every byte: the bytes received must equal the server's Content-Length.
+#   2. The columns: the header must be exactly EXPECTED_COLUMNS.
+#   3. No doubling: exact duplicate rows above MAX_DUPLICATE_SHARE stop the run.
 
+class IncompleteDownload(RuntimeError):
+    pass
+
+
+def _get_with_retries(what: str, attempt_once, retries: int = 4):
+    """Run attempt_once(), retrying with backoff on any error. The network layer
+    fails in too many ways to enumerate; every one of them is worth a retry."""
+    last_error: Optional[Exception] = None
     for attempt in range(retries):
         try:
-            request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(request, timeout=120) as response:
-                return json.loads(response.read().decode("utf-8"))
+            return attempt_once()
         except Exception as exc:  # noqa: BLE001 - network layer, retry on anything
             last_error = exc
             sleep_for = 2 ** attempt
-            print(f"  ! fetch failed at offset {offset} ({exc}); retrying in {sleep_for}s",
-                  file=sys.stderr)
+            print(f"  ! {what} failed ({exc}); retrying in {sleep_for}s", file=sys.stderr)
             time.sleep(sleep_for)
+    raise RuntimeError(f"{what} failed after {retries} attempts: {last_error}")
 
-    raise RuntimeError(f"failed to fetch offset {offset}: {last_error}")
+
+def resolve_csv_url(retries: int = 4) -> str:
+    """The CSV's address, asked of resource_show on every run rather than written
+    down here: the portal can move the file, and resource_show is where it says
+    so. The address answers with a redirect to the file's blob storage."""
+    url = f"{CKAN_ACTION}/resource_show?" + urllib.parse.urlencode({"id": RESOURCE_ID})
+
+    def once() -> str:
+        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(request, timeout=120) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        csv_url = ((payload.get("result") or {}).get("url") or "").strip()
+        if not csv_url.lower().startswith("https://"):
+            raise RuntimeError(f"resource_show gave no https address for {RESOURCE_ID}")
+        return csv_url
+
+    return _get_with_retries("resource_show", once, retries)
 
 
-def iter_all_rows(max_rows: Optional[int] = None, throttle: float = 0.3) -> Iterator[dict]:
-    offset = 0
-    total: Optional[int] = None
-    yielded = 0
-
+def copy_checked(response, out, content_length: Optional[str]) -> int:
+    """Stream a response body to `out` in chunks, never holding the whole file in
+    memory, and refuse it unless the byte count is exactly Content-Length."""
+    if content_length is None or not str(content_length).strip().isdigit():
+        raise IncompleteDownload(
+            "INCOMPLETE DOWNLOAD: the server sent no Content-Length, so a cut-off "
+            "file cannot be told from a whole one. Refusing to build from it.")
+    expected = int(content_length)
+    received = 0
     while True:
-        payload = fetch_page(offset)
-        result = payload.get("result", {})
-        records = result.get("records", [])
-        if total is None:
-            total = result.get("total")
-            print(f"  dataset reports {total:,} total rows")
-        if not records:
+        chunk = response.read(DOWNLOAD_CHUNK)
+        if not chunk:
             break
+        out.write(chunk)
+        received += len(chunk)
+    if received != expected:
+        raise IncompleteDownload(
+            f"INCOMPLETE DOWNLOAD: expected {expected:,} bytes, received {received:,}. "
+            f"Refusing to build from partial data.")
+    return received
 
-        for row in records:
+
+def download_csv(url: str, dest_path: str, retries: int = 4) -> int:
+    """Download the CSV to dest_path, whole or not at all. Each attempt starts
+    the file again; returns the byte count, which equals Content-Length."""
+    def once() -> int:
+        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(request, timeout=120) as response, \
+                open(dest_path, "wb") as out:
+            return copy_checked(response, out, response.headers.get("Content-Length"))
+
+    return _get_with_retries("CSV download", once, retries)
+
+
+def check_columns(fieldnames: Optional[Iterable[str]]) -> None:
+    got = list(fieldnames or [])
+    missing = [c for c in EXPECTED_COLUMNS if c not in got]
+    extra = [c for c in got if c not in EXPECTED_COLUMNS]
+    repeated = sorted({c for c in got if got.count(c) > 1})
+    if missing or extra or repeated:
+        raise RuntimeError(
+            f"COLUMNS CHANGED: the CSV has {len(got)} columns; missing {missing}, "
+            f"unexpected {extra}, repeated {repeated}. Refusing to build until "
+            f"EXPECTED_COLUMNS is reviewed against the new file.")
+
+
+def _largest_field_limit() -> int:
+    # csv's default limit is 128 KB a field. A free-text comment can be longer,
+    # and csv.Error midway through 1.3M rows is a lost run. C long caps it.
+    return min(sys.maxsize, 2**31 - 1)
+
+
+def as_datastore_value(value: Optional[str]) -> str:
+    """A CSV cell as the datastore API served it. Measured on the first 1,000
+    rows, 5 November 2026: the API's text had no leading or trailing whitespace
+    (the file had it on 34 of those rows, vendor names among them) and LF where
+    the file had CRLF inside a value. Nothing else differed."""
+    return (value or "").replace("\r\n", "\n").strip()
+
+
+def iter_csv_rows(path: str, max_rows: Optional[int] = None) -> Iterator[dict]:
+    """Rows of the contracts CSV as dicts keyed by EXPECTED_COLUMNS, the same
+    field names the datastore API used, each value as the API served it (see
+    as_datastore_value). Empty cells arrive as "" where the API sent null;
+    normalize() treats the two alike.
+
+    `_id` is set to the row's position in the file, counting from 1. The API's
+    `_id` was the datastore's internal row number, which the file does not carry;
+    nothing downstream reads it beyond copying it into source_row_id.
+    """
+    csv.field_size_limit(_largest_field_limit())
+    rows = 0
+    duplicates = 0
+    seen: set[bytes] = set()
+    with open(path, encoding="utf-8-sig", newline="") as fh:
+        reader = csv.DictReader(fh)
+        check_columns(reader.fieldnames)
+        for row in reader:
+            rows += 1
+            digest = hashlib.blake2b(
+                "\x1f".join(str(row.get(c) or "") for c in EXPECTED_COLUMNS).encode("utf-8"),
+                digest_size=16).digest()
+            if digest in seen:
+                duplicates += 1
+            else:
+                seen.add(digest)
+            row = {c: as_datastore_value(row.get(c)) for c in EXPECTED_COLUMNS}
+            row["_id"] = rows
             yield row
-            yielded += 1
-            if max_rows and yielded >= max_rows:
+            if max_rows and rows >= max_rows:
                 return
 
-        offset += len(records)
-        print(f"  fetched {offset:,}" + (f" / {total:,}" if total else ""))
-        if total and offset >= total:
-            break
-        time.sleep(throttle)
-
-    # A truncated download is the most dangerous silent failure in this pipeline:
-    # it produces a perfectly self-consistent site containing a fraction of the
-    # data. The API reports how many rows exist, so compare against it and refuse
-    # to continue if they disagree.
-    if total is not None and max_rows is None and yielded < total:
+    print(f"  read {rows:,} rows; exact duplicates {duplicates:,}")
+    if rows and duplicates / rows > MAX_DUPLICATE_SHARE:
         raise RuntimeError(
-            f"INCOMPLETE DOWNLOAD: API reported {total:,} rows, received {yielded:,} "
-            f"({yielded/total*100:.1f}%). Refusing to build from partial data.")
+            f"DUPLICATED SOURCE: {duplicates:,} of {rows:,} rows "
+            f"({duplicates / rows * 100:.1f}%) are exact copies of an earlier row, "
+            f"above the {MAX_DUPLICATE_SHARE:.0%} limit. "
+            f"Refusing to build from duplicated data.")
+
+
+def iter_all_rows(max_rows: Optional[int] = None) -> Iterator[dict]:
+    """Every row of the published CSV. The file goes to a temporary file (the
+    system temp folder, or TMPDIR), is read from there, and is deleted after."""
+    url = resolve_csv_url()
+    fd, path = tempfile.mkstemp(prefix="contracts-", suffix=".csv")
+    os.close(fd)
+    try:
+        received = download_csv(url, path)
+        print(f"  downloaded {received:,} bytes, equal to Content-Length")
+        yield from iter_csv_rows(path, max_rows=max_rows)
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 # --------------------------------------------------------------------------
@@ -588,6 +729,79 @@ def self_test(fixture_path: str) -> int:
     failures += 0 if ok else 1
     print(f"[{'PASS' if ok else 'FAIL'}] fixture carries no personal names: "
           f"{len(people)} found")
+
+    # 10 to 13: the CSV path, offline. The fixture's records are API records, so
+    # written out as the published file would hold them, they must read back
+    # into the same normalized contracts, and each guard must refuse its case.
+    import io
+    work = tempfile.mkdtemp()
+
+    def write_csv(name: str, rows: list[dict], columns=EXPECTED_COLUMNS) -> str:
+        path = os.path.join(work, name)
+        with open(path, "w", encoding="utf-8-sig", newline="") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(columns)
+            for r in rows:
+                writer.writerow(["" if r.get(c) is None else str(r.get(c)) for c in columns])
+        return path
+
+    def refused(path: str, needle: str) -> bool:
+        try:
+            for _ in iter_csv_rows(path):
+                pass
+        except RuntimeError as exc:
+            return needle in str(exc)
+        return False
+
+    # 10. Same contracts from the CSV as from the API records. Normalized afresh:
+    #     the checks above changed `normalized` in place (dedup, category names).
+    from_api = [normalize(r, today=today) for r in raw]
+    from_csv = [normalize(r, today=today) for r in iter_csv_rows(write_csv("all.csv", raw))]
+    strip = lambda c: {k: v for k, v in asdict(c).items() if k != "source_row_id"}
+    same = sum(1 for a, b in zip(from_api, from_csv) if strip(a) == strip(b))
+    ok = len(from_csv) == len(from_api) == same
+    failures += 0 if ok else 1
+    print(f"[{'PASS' if ok else 'FAIL'}] CSV rows normalize as the API records do: "
+          f"{same}/{len(normalized)}")
+
+    # 11. Columns: exactly the expected set, or the run stops.
+    cols = list(EXPECTED_COLUMNS)
+    cases = {
+        "a column missing": cols[:-1],
+        "an extra column": cols + ["new_field"],
+        "a renamed column": ["vendor"] + cols[1:],
+        "a repeated column": cols + [cols[0]],
+    }
+    caught = [what for what, header in cases.items()
+              if refused(write_csv("cols.csv", raw[:3], header), "COLUMNS CHANGED")]
+    ok = len(caught) == len(cases) and not refused(write_csv("ok.csv", raw[:3]), "COLUMNS")
+    failures += 0 if ok else 1
+    print(f"[{'PASS' if ok else 'FAIL'}] column check refuses changed headers: "
+          f"{len(caught)}/{len(cases)}, accepts the expected one")
+
+    # 12. Doubling: just over 1% exact duplicates stops the run; just under does not.
+    over = raw + raw[:2]            # 2 of 112 rows, 1.8%
+    under = raw + raw[:1]           # 1 of 111 rows, 0.9%
+    ok = (refused(write_csv("over.csv", over), "Refusing to build from duplicated data")
+          and not refused(write_csv("under.csv", under), "duplicated"))
+    failures += 0 if ok else 1
+    print(f"[{'PASS' if ok else 'FAIL'}] duplicate check: 2 of {len(over)} refused, "
+          f"1 of {len(under)} accepted")
+
+    # 13. Bytes: a body shorter or longer than Content-Length, or no length at all,
+    #     stops the run; an exact one passes.
+    body = b"x" * 1000
+    outcomes = []
+    for length in ("1000", "1001", "999", None):
+        try:
+            copy_checked(io.BytesIO(body), io.BytesIO(), length)
+            outcomes.append("ok")
+        except IncompleteDownload:
+            outcomes.append("refused")
+    ok = outcomes == ["ok", "refused", "refused", "refused"]
+    failures += 0 if ok else 1
+    print(f"[{'PASS' if ok else 'FAIL'}] byte count must equal Content-Length: "
+          f"{outcomes.count('refused')}/3 bad lengths refused, the exact one kept")
 
     # ---- descriptive output ----
     print("\n" + "-" * 68)
